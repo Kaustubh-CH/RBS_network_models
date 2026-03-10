@@ -7,15 +7,20 @@ batch.py - Batch run script for Organoid_RTT_R270X_DIV112_WT
 import os
 from netpyne import specs
 from netpyne.batch import Batch
-from RBS_network_models.utils.batch_helper import rangify_params, get_num_nodes, get_cores_per_node, get_tasks_per_node
-from RBS_network_models.utils.cfg_helper import import_module_from_path
-from RBS_network_models.fitnessFunc import fitnessFunc_v3 as fitnessFunc
-from RBS_network_models.utils.helper import indent_decrease, indent_increase
+#RBS_network_models/utils/utils_old/batch_helper.py
+from RBS_network_models.utils.utils_old.batch_helper import rangify_params, get_num_nodes, get_cores_per_node, get_tasks_per_node
+from RBS_network_models.utils.utils_old.cfg_helper import import_module_from_path
+# from RBS_network_models.fitnessFunc_claude import fitnessFunc_claude as fitnessFunc
+from RBS_network_models.fitnessFunc_v2 import fitnessFunc_v2 as fitnessFunc
+# from RBS_network_models.fitnessFunc import fitnessFunc_v3 as fitnessFunc
+
+from RBS_network_models.utils.utils_old.helper import indent_decrease, indent_increase
 import numpy as np
 from pathlib import Path
 from netpyne import sim
 from copy import deepcopy
 import json
+import h5py
 
 # functions ==========================================================================================
 def batchEvol_v2(**kwargs):
@@ -42,13 +47,39 @@ def batchEvol_v2(**kwargs):
         for path in reference_data_paths:
             if not os.path.exists(path): raise ValueError(f"Reference data path does not exist: {path}")
             else: 
-                # load numpy data w/ pickle
-                print(f'loading reference data from {reference_data_paths}...')
-                path = path.resolve().__str__()
+                path_str = path.resolve().__str__()
+                file_ext = path.suffix.lower()
                 
-                # instead lets append the path to the list
-                reference_data_list.append(path)
-                print('reference data loaded.')
+                print(f'Loading reference data from {path_str}...')
+                
+                if file_ext == '.h5' or file_ext == '.hdf5':
+                    # Load HDF5 file (similar to fitnessFunc_claude.py)
+                    print(f'  Detected HDF5 format: {file_ext}')
+                    try:
+                        with h5py.File(path_str, 'r') as f:
+                            # Just validate it can be opened - actual loading happens in fitness function
+                            print(f'  Validated HDF5 file with groups: {list(f.keys())}')
+                        reference_data_list.append(path_str)
+                        print('  HDF5 reference data path stored.')
+                    except Exception as e:
+                        raise ValueError(f"Error validating HDF5 file {path_str}: {e}")
+                        
+                elif file_ext == '.npy':
+                    # Load numpy file
+                    print(f'  Detected numpy format: {file_ext}')
+                    try:
+                        # Validate it can be loaded
+                        data = np.load(path_str, allow_pickle=True)
+                        print(f'  Validated numpy file with shape/type: {type(data)}')
+                        reference_data_list.append(path_str)
+                        print('  Numpy reference data path stored.')
+                    except Exception as e:
+                        raise ValueError(f"Error loading numpy file {path_str}: {e}")
+                        
+                else:
+                    print(f'  Warning: Unknown file format {file_ext}, storing path anyway')
+                    reference_data_list.append(path_str)
+                    
         kwargs['reference_data_list'] = reference_data_list
         
         # load reference data into global
@@ -84,23 +115,27 @@ def batchEvol_v2(**kwargs):
 
             #fitness schema
             'fit_schema': kwargs.get('fit_schema', None),
-            'seed_fitness': kwargs.get('seed_fitness', None), # necessary for fitness function to do N-factorial      
+            'seed_fitness': kwargs.get('seed_fitness', None), # necessary for fitness function to do N-factorial
+            
+            # Network cool down parameter - excludes this period from metric computation
+            'network_cool_down': kwargs.get('network_cool_down', 0.0),
         }
         return fitnessFuncArgs  
     
     def init_batch_attributes(kwargs):
         # simulation max iteration options -- max iterations before stopping generation
         time_sleep = 5 # seconds
-        max_wait = 25 # minutes
+        max_wait = 25*5 # minutes
         maxiter_wait = max_wait * 60 / time_sleep # convert to number of iterations
+        maxiter_wait = 20
         #b.batchLabel = 'evol' #NOTE: if left unset, batchLabel will be set to datetime at runtime
         
         # pop size options
         #pop_size = 512
         #pop_size = 256        
         #pop_size = 128
-        #pop_size = 8
-        pop_size = 64
+        # pop_size = 2
+        pop_size = 10
 
         # num elites options
         #num_elites = 50
@@ -125,7 +160,9 @@ def batchEvol_v2(**kwargs):
         seeds = kwargs.get('seeds', None)
 
         # assert seeds is a list of paths to seed cfg files
-        if seeds is None: raise ValueError("seeds must be provided in kwargs")
+        if seeds is None:
+            return None, None
+        # if seeds is None: raise ValueError("seeds must be provided in kwargs")
         
         # reverse the order of seeds, so that the newest seeds are used first
         #seeds = seeds[::-1] # NOTE: newer seeds are at the top now...
@@ -216,7 +253,7 @@ def batchEvol_v2(**kwargs):
                 #'mpirun',
                 
                 #'shifter --image=adammwea/netsims_docker:v1'
-                'srun -N 1',
+                'MPICH_GPU_SUPPORT_ENABLED=0 srun -N 1',
                 # # bind to socket
                 # ' --cpu-bind=verbose,cores'
                 # ' --hint=multithread' # enable multithreading on each core
@@ -254,17 +291,27 @@ def batchEvol_v2(**kwargs):
         indent_increase()
         
         # init file paths, modify as needed
-        cfgFile_path = str(Path('~/dev/RBS_network_models/RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_WT/src/cfg.py').expanduser().resolve())
-        netParams_path = str(Path('~/dev/RBS_network_models/RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_WT/src/netParams.py').expanduser().resolve())
-        
+        cfgFile_path = str(Path('/pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_FxHET/src/cfg.py').expanduser().resolve())
+        netParams_path = str(Path('/pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_FxHET/src/netParams.py').expanduser().resolve())
+
+        # Load network_cool_down parameter from cfg file
+        print('Loading network_cool_down parameter from cfg...')
+        cfg_module = import_module_from_path(cfgFile_path)
+        network_cool_down = getattr(cfg_module.cfg, 'network_cool_down', 0.0)
+        kwargs['network_cool_down'] = network_cool_down
+        print(f'network_cool_down = {network_cool_down} seconds')
+
         # init batch object
         print('initializing batch object...')
-        b = Batch(cfgFile=cfgFile_path, netParamsFile=netParams_path, params=params,)
-        b.method = 'evol' # set method to evolutionary algorithm
-
+        b = Batch(cfgFile=cfgFile_path, netParamsFile=netParams_path, params=params)
+        batchLabel = kwargs.get('batchLabel', None)
+        if batchLabel:
+            b.batchLabel = batchLabel
+        b.method = 'optuna' # set method to evolutionary algorithm
+        
         # #init fitness function args
         # print('initializing fitness function arguments...')
-        # fitnessFuncArgs = init_fitnessFunc_args(**kwargs)      
+        fitnessFuncArgs = init_fitnessFunc_args(**kwargs)      
         
         # apply kwargs to batch object
         print('setting batch object attributes...')
@@ -273,7 +320,8 @@ def batchEvol_v2(**kwargs):
         #convert seeds into interable list of params
         print('setting seeds configs...')
         seeds_iterable, seed_fitness = get_seed_cfgs(params, **kwargs)
-        kwargs['seed_fitness'] = seed_fitness
+        if seeds_iterable is not None:
+            kwargs['seed_fitness'] = seed_fitness
 
         #init fitness function args
         print('initializing fitness function arguments...')
@@ -281,23 +329,84 @@ def batchEvol_v2(**kwargs):
         
         # evolutionary algorithm configuration
         print('setting evolutionary algorithm configuration...')
-        b.evolCfg = {
-            'evolAlgorithm': 'custom',
+        # test_simulated_data_path = '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/KCNT_Test_Jan12_20s_noSeed_v4/batch_runs/batch_2026-01-12_spiking_only/gen_6/gen_6_cand_25_data.pkl'
+        # # fitnessFuncArgs['reference_data_path'] = '/pscratch/sd/k/ktub1999/networkSimulatons_Sonnet/experimental_data.h5'
+        # fitnessFuncArgs['sim_data_path'] = test_simulated_data_path
+        # fitnessFuncArgs['batching'] = False
+        # fitnessFuncArgs['try_load'] = False
+        # #should be bad
+        # import pdb; pdb.set_trace()
+        # fit_value1 = fitnessFunc( simulated_data_path=test_simulated_data_path,**fitnessFuncArgs)
+        # test_simulated_data_path = '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/KCNT_Test_Jan12_20s_noSeed_v4/batch_runs/batch_2026-01-12_spiking_only/gen_7/gen_7_cand_57_data.pkl'
+        # fitnessFuncArgs['sim_data_path'] = test_simulated_data_path
+        # #should be good
+        # fit_value2 = fitnessFunc( simulated_data=test_simulated_data_path,**fitnessFuncArgs)
+        # test_simulated_data_path = '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/KCNT_Test_Jan12_20s_noSeed_v3/batch_runs/batch_2026-01-12_spiking_only/gen_54/gen_54_cand_9_data.pkl'
+        # fitnessFuncArgs['sim_data_path'] = test_simulated_data_path
+        # #should be best
+        # fit_value3 = fitnessFunc( simulated_data=test_simulated_data_path,**fitnessFuncArgs)
+        # print(f'Test fitness values: bad={fit_value1}, good={fit_value2}, best={fit_value3}')
+        mode = 'optuna'
+        if mode == 'asd':
+            b.method = 'asd'
+            b.optimCfg = {
+                'fitnessFunc': fitnessFunc,
+                'fitnessFuncArgs': fitnessFuncArgs,
+                'maxFitness': 1000,
+                'maxiters': 1000,
+                'maxtime': 3600 * 8,
+                'stepsize': 0.1,
+                'sinc': 2,
+                'sdec': 2,
+                'pinc': 2,
+                'pdec': 2,
+                'maxiter_wait': 10,
+                'time_sleep': 5,
+                'popsize': 1,
+            }
+        if mode =='optuna':
+            b.optimCfg = {
             'fitnessFunc': fitnessFunc,
             'fitnessFuncArgs': fitnessFuncArgs,
-            'pop_size': kwargs.get('pop_size', 16),
-            'num_elites': kwargs.get('num_elites', 4),
-            'mutation_rate': 0.5,
-            'crossover': 0.5,
-            'maximize': False,
-            'max_generations': 1000,
-            'time_sleep': kwargs.get('time_sleep', 5),
-            'maxiter_wait': kwargs.get('maxiter_wait', 10),
-            'defaultFitness': 1000,
-            'seeds': seeds_iterable, #requires params to put candidates in correct order,
-            #'startGeneration': 8, #NOTE: dont used this. 
-        }
-        
+            'maxFitness': 10000,
+            'maxiters': 1000,          # total number of trials
+            'maxtime': 3600 * 8,      # 8 hour budget
+            'maxiter_wait': kwargs.get('maxiter_wait', 100),
+            'time_sleep': kwargs.get('time_sleep', 15),
+            'direction': 'minimize',
+            }
+        elif seeds_iterable is not None:
+            b.evolCfg = {
+                'evolAlgorithm': 'custom',
+                'fitnessFunc': fitnessFunc,
+                'fitnessFuncArgs': fitnessFuncArgs,
+                'pop_size': kwargs.get('pop_size', 16),
+                'num_elites': kwargs.get('num_elites', 4),
+                'mutation_rate': 0.5,
+                'crossover': 0.5,
+                'maximize': False,
+                'max_generations': 1000,
+                'time_sleep': kwargs.get('time_sleep', 5),
+                'maxiter_wait': kwargs.get('maxiter_wait', 10),
+                'defaultFitness': 1000,
+                'seeds': seeds_iterable, #requires params to put candidates in correct order,
+                #'startGeneration': 8, #NOTE: dont used this. 
+            }
+        else:
+            b.evolCfg = {
+                'evolAlgorithm': 'custom',
+                'fitnessFunc': fitnessFunc,
+                'fitnessFuncArgs': fitnessFuncArgs,
+                'pop_size': kwargs.get('pop_size', 16),
+                'num_elites': kwargs.get('num_elites', 4),
+                'mutation_rate': 0.5,
+                'crossover': 0.5,
+                'maximize': False,
+                'max_generations': 1000,
+                'time_sleep': kwargs.get('time_sleep', 5),
+                'maxiter_wait': kwargs.get('maxiter_wait', 10),
+                'defaultFitness': 1000,
+            }
         # init runcfg
         print('setting run configuration...')
         b = init_runCfg(b, **kwargs)
@@ -305,7 +414,7 @@ def batchEvol_v2(**kwargs):
         # append tag to batch label for easy identification if desired
         tag = kwargs.get('tag', None)
         print(f'tag = {tag}')
-        if tag is not None:
+        if tag is not None and not b.batchLabel.endswith(f'_{tag}'):
             b.batchLabel = b.batchLabel + f'_{tag}'
                 
         # set save folder
@@ -341,6 +450,30 @@ def batchEvol_v2(**kwargs):
     ## create batch object
     print('initializing batch object...')
     b = initialize_batch(params, kwargs)
+
+    ## pre-enqueue seed trials into Optuna study (if using optuna with seeds)
+    seeds = kwargs.get('seeds', None)
+    if b.method == 'optuna' and seeds is not None:
+        import optuna
+        # build the study with the same name/storage that NetPyNE will use
+        study_name = b.batchLabel
+        storage = f'sqlite:///{b.saveFolder}/{b.batchLabel}_storage.db'
+        direction = b.optimCfg.get('direction', 'minimize')
+        study = optuna.create_study(
+            study_name=study_name, storage=storage,
+            load_if_exists=True, direction=direction,
+        )
+        # get param labels in the same order NetPyNE will use
+        paramLabels = [x['label'] for x in b.params]
+        # get seed cfgs using the same logic as evolCfg seeds
+        seeds_iterable, _ = get_seed_cfgs(params, **kwargs)
+        if seeds_iterable is not None:
+            print(f'Enqueueing {len(seeds_iterable)} seed trial(s) into Optuna study...')
+            for seed_vals in seeds_iterable:
+                seed_dict = {str(label): float(val) for label, val in zip(paramLabels, seed_vals)}
+                study.enqueue_trial(seed_dict)
+            print(f'Seed trials enqueued into {storage}')
+        del study  # close study so NetPyNE can open it cleanly
 
     ## run batch
     print('running batch...')
@@ -385,7 +518,7 @@ def batchEvol(feature_path, **kwargs):
     ## set batch object attributes
     time_sleep = 5 # seconds
     #max_wait = 30 # minutes
-    max_wait = 10 # minutes
+    max_wait = 20 # minutes
     maxiter_wait = max_wait * 60 / time_sleep # convert to number of iterations
     #b.batchLabel = 'evol' #NOTE: if left unset, batchLabel will be set to datetime at runtime
     from RBS_network_models.CDKL5.DIV21.src.conv_params import conv_params

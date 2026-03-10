@@ -1,12 +1,18 @@
-from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_WT.src.batch import batchEvol_v2 as batchEvol
-from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_WT.src.evol_params import params
-from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_WT.src.conv_params import conv_params
-from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_WT.src.conv_params import mega_params
+from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.batch import batchEvol_v2 as batchEvol
+# from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.evol_params_from_seed_v2 import params
+# from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.evol_params_v4 import params
+from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.evol_params_from_seed_v3_large import params
+from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.conv_params import conv_params
+from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.conv_params import mega_params
+# /RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_FxHET/src
 #from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_WT.seeds import seeds
 #from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_WT.seeds_2 import seeds
-from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_WT.seeds_3 import seeds
+from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.seeds_5 import seeds
 #from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_WT.fitness_schema.schema_1 import fit_schema
-from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_WT.fitness_schema.schema_2 import fit_schema
+from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.fitness_schema.schema_claude import fit_schema
+from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.fitness_schema.schema_v2 import fit_schema
+
+# from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.fitness_schema.schema_3 import fit_schema
 import netpyne
 
 try:
@@ -22,20 +28,24 @@ kwargs = {
     'parameter_space': params,
     'batchFolder': (
         #'/pscratch/sd/a/adammwea/workspace/RBS_network_models/data/Organoid_RTT_R270X/DIV112_WT/batch_runs'
-        '/global/homes/a/adammwea/pscratch/z_simulated_data/CDKL5-E6D_T2_C1_05212024/DIV21_WT/batch_runs'
+        '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/KCNT_Test_Mar_09_param_from_seed_v3_large/batch_runs'
         ),
     'reference_data_paths': { # for fitting against
         #'/global/homes/a/adammwea/pscratch/zoutputs/CDKL5-E6D_T2_C1_05212024/CDKL5-E6D_T2_C1_05212024/240611/M08029/Network/000091/network_analysis/well005/metrics.npy'
-        '/global/homes/a/adammwea/pscratch/z_analyzed_data/CDKL5-E6D_T2_C1_05212024/CDKL5-E6D_T2_C1_05212024/240611/M08029/Network/000091/network_analysis/well005/metrics.npy'
+        # '/pscratch/sd/k/ktub1999/networkSimulations/z_analyzed_data/network_analysis/well000/metrics.npy'
+        # '/pscratch/sd/k/ktub1999/networkSimulatons_Sonnet/experimental_data_v2.h5'
+        '/pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/_scripts/experimental_features_20.h5'
         },
     'runCfg_script_path': (
         #'/pscratch/sd/a/adammwea/workspace/RBS_network_models/RBS_network_models/Organoid_RTT_R270X/DIV112_WT/src/init.py'
-        '/global/homes/a/adammwea/dev/RBS_network_models/RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_WT/src/init.py'
+        '/pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_FxHET/src/init.py'
         ),
     "conv_params": conv_params,
     "mega_params": mega_params,
     "seeds": seeds,
+    # "seeds": None,
     "fit_schema": fit_schema,
+    "plot_sim": True,
     
     # tags
     # older tags before implementing in run_batch.py - previously implemented in src/batch.py in hacky way.
@@ -57,6 +67,7 @@ kwargs = {
     # so I will try to optimize spiking characteristics first - since it's more fundamental to the network activity, and then optimize bursting characteristics later.
     # I think this will work since I can normalize the spiking activity to resist degress and then optimize bursting characteristics based on that.
     'tag': 'spiking_only', # HACK: hacked the fitness function for this to work right now. Will need to fix later.
+    # 'batchLabel': 'batch_2026-03-06_spiking_only', # Set the batchLabel to resume an earlier optuna study run instead of starting from gen 0
     }                       # also added deal breaker. If any one neuron has zeron synaptic connections, it is a deal breaker.
 
 batchEvol(**kwargs)

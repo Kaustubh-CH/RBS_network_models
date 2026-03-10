@@ -32,6 +32,8 @@ if version == 3.0:
     ###############################################################################
     
     def dynamic_positive_normal(mean, std, size):    
+        if std is None or std < 1e-12:
+            return np.full(size, max(mean, 0.0))
         from scipy.stats import truncnorm
         a, b = (0 - mean) / std, float("inf")
         initial_values = truncnorm.rvs(a, b, loc=mean, scale=std, size=size * 2)
@@ -123,7 +125,7 @@ if version == 3.0:
                 #'pop': cell_type,
                 #'cellLabel': cellsLabel,
                 #'cellModel': 'HH',                   
-                'cellType': cellsLabel,
+                # 'cellType': cellsLabel,
                 'conds': {                          # I finally understgand how conds works. This sets the conditions required for population
                                                     # attributes to be applied to the cell.
                                                     # In this case, the cellType, cellModel, cellLabel, and pop must be equal to the values
@@ -342,17 +344,30 @@ if version == 3.0:
         if not os.path.exists(features_path):
             raise FileNotFoundError(f"Features path {features_path} does not exist.")
         
-        # Load .npy file at features_path
-        experimental_features = np.load(features_path, allow_pickle=True).item()   
-        
-        unit_locations = experimental_features['unit_locations']        # unit_locations = cfg.unit_locations
+        # Load unit locations from HDF5 experimental features file
+        import h5py
+        unit_locations = {}
+        with h5py.File(features_path, 'r') as _f:
+            for _key in _f.keys():
+                if _key.startswith('unit_'):
+                    _uid_str = _key[len('unit_'):]
+                    try:
+                        _uid = int(_uid_str)
+                    except ValueError:
+                        _uid = _uid_str
+                    _attrs = _f[_key].attrs
+                    _x = float(_attrs['loc_x'])
+                    _y = float(_attrs['loc_y'])
+                    _z = float(_attrs['loc_z']) if 'loc_z' in _attrs else 0.0
+                    unit_locations[_uid] = (_x, _y, _z)
+
         inhib_units = cfg.inhib_units
         excit_units = cfg.excit_units
-        
+
         # derive posE and posI similar to the above method
         posE = {gid: pos for gid, pos in unit_locations.items() if gid in excit_units}
         posI = {gid: pos for gid, pos in unit_locations.items() if gid in inhib_units}
-        print('positions loaded from cfg')
+        print('positions loaded from experimental HDF5')
     ###############################################################################
     #
     # Config cell, pop, and connectivity params
@@ -402,6 +417,8 @@ elif version == 2.0:
     ###############################################################################
     
     def dynamic_positive_normal(mean, std, size):    
+        if std is None or std < 1e-12:
+            return np.full(size, max(mean, 0.0))
         from scipy.stats import truncnorm
         a, b = (0 - mean) / std, float("inf")
         initial_values = truncnorm.rvs(a, b, loc=mean, scale=std, size=size * 2)
@@ -771,6 +788,8 @@ elif version == 1.0:
     ###############################################################################
     
     def dynamic_positive_normal(mean, std, size):    
+        if std is None or std < 1e-12:
+            return np.full(size, max(mean, 0.0))
         from scipy.stats import truncnorm
         a, b = (0 - mean) / std, float("inf")
         initial_values = truncnorm.rvs(a, b, loc=mean, scale=std, size=size * 2)
@@ -1106,6 +1125,8 @@ elif version == 0.0:
     #from netpyne.batchtools import specs
             
     def dynamic_positive_normal(mean, std, size):    
+        if std is None or std < 1e-12:
+            return np.full(size, max(mean, 0.0))
         a, b = (0 - mean) / std, float("inf")
         initial_values = truncnorm.rvs(a, b, loc=mean, scale=std, size=size * 2)
         left_truncated_count = np.sum(initial_values < 0)

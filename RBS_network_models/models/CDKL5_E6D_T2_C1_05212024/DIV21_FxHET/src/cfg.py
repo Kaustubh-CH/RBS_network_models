@@ -1,5 +1,5 @@
 from netpyne import specs
-from RBS_network_models.utils.cfg_helper import import_module_from_path
+from RBS_network_models.utils.utils_old.cfg_helper import import_module_from_path
 import os
 import numpy as np
 import random
@@ -34,8 +34,8 @@ if version == 3.0:
                                 'importing the params from __main__')
             warnings.warn(warning_message)
             
-            #from RBS_network_models.CDKL5.DIV21.src.evol_params import params
-            from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_WT.src.evol_params import params
+            #from RBS_network_models.CDKL5.DIV21.src.evol_params import paramsZ
+            from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.evol_params import params
             
             # cycle through params, if any are ranges of values, randomly select one between the range
             print('Randomizing parameters within specified ranges...')
@@ -57,7 +57,7 @@ if version == 3.0:
     # import using import_module_from_path
     
     # features data path
-    feature_data_path = '/global/homes/a/adammwea/pscratch/z_analyzed_data/CDKL5-E6D_T2_C1_05212024/CDKL5-E6D_T2_C1_05212024/240611/M08029/Network/000091/network_analysis/well005/metrics.npy'
+    feature_data_path = '/pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/_scripts/experimental_features.h5'
     assert os.path.exists(feature_data_path), f'{feature_data_path} not found'
     
     # Initialize simulation configuration
@@ -67,12 +67,21 @@ if version == 3.0:
     cfg.locations_known = True
     cfg.features_path = feature_data_path
     if 'experimental_features' not in globals():
-        experimental_features = np.load(cfg.features_path, allow_pickle=True).item()
+        import h5py
+        experimental_features = {}
+        with h5py.File(cfg.features_path, 'r') as _f:
+            for _key in _f.keys():
+                if _key.startswith('unit_'):
+                    _uid_str = _key[len('unit_'):]
+                    try:
+                        _uid = int(_uid_str)
+                    except ValueError:
+                        _uid = _uid_str
+                    experimental_features[_uid] = dict(_f[_key].attrs)
     
-    # unit locations
-    unit_types = experimental_features['unit_types']
-    cfg.inhib_units = [gid for gid, x in unit_types.items() if x == 'I']
-    cfg.excit_units = [gid for gid, x in unit_types.items() if x == 'E']
+    # unit locations - classify from cell_type attribute ('excitatory' / 'inhibitory')
+    cfg.inhib_units = [uid for uid, attrs in experimental_features.items() if attrs.get('cell_type') == 'inhibitory']
+    cfg.excit_units = [uid for uid, attrs in experimental_features.items() if attrs.get('cell_type') == 'excitatory']
     cfg.num_excite = len(cfg.excit_units)
     cfg.num_inhib = len(cfg.inhib_units) 
 
@@ -83,11 +92,14 @@ if version == 3.0:
     #cfg.duration_seconds = 1  # Duration of the simulation, in seconds
     #cfg.duration_seconds = 15  # Duration of the simulation, in seconds
     #cfg.duration_seconds = 65  # Duration of the simulation, in seconds
-    cfg.duration_seconds = 140 # Duration of the simulation, in seconds  #aw 2025-05-18 19:35:47 - now that we're cutting the first 20s of data, I want to make sure I have enough time to get the full response - especially for bursting metrics
+    cfg.duration_seconds = 20 # Duration of the simulation, in seconds  #aw 2025-05-18 19:35:47 - now that we're cutting the first 20s of data, I want to make sure I have enough time to get the full response - especially for bursting metrics
 
+    # Network cool down period - allows network to stabilize before analysis
+    # This time is added to simulation duration but excluded from metric computation
+    cfg.network_cool_down = 5.0  # Cool down period in seconds (set to 0 to disable)
 
     # set simulation configuration
-    cfg.duration = cfg.duration_seconds * 1e3  # Duration of the simulation, in ms
+    cfg.duration = (cfg.duration_seconds + cfg.network_cool_down) * 1e3  # Duration of the simulation, in ms (includes cool down)
     cfg.cache_efficient = True  # Use CVode cache_efficient option to optimize load on many cores
     cfg.dt = 0.025  # Internal integration timestep to use
     cfg.recordStep = 0.1  # Step size in ms to save data (e.g., V traces, LFP, etc)
@@ -194,6 +206,24 @@ elif version == 2.0:
     #cfg.duration_seconds = 1  # Duration of the simulation, in seconds
     cfg.duration_seconds = 15  # Duration of the simulation, in seconds
     
+    cfg.addNetStim = False  # Whether to add network stimulation
+
+    if cfg.addNetStim:
+        cfg.NetStim1 = {
+            'pop': 'E',  # Target excitatory population
+            'cellConds': {},  # Apply to all cells in pop
+            'ynorm': [0, 1],  # Full range
+            'sec': 'soma',
+            'loc': 0.5,
+            'synMech': 'exc',
+            'synMechWeightFactor': [1.0],
+            'start': 0,  # Start immediately
+            'interval': 1000.0 / 10.0,  # 10 Hz average
+            'noise': 1.0,  # Poisson noise (randomness)
+            'number': 1e9,  # Very large number (continuous)
+            'weight': 0.01,  # Weight of stimulation
+            'delay': 0
+        }
     # set simulation configuration
     cfg.duration = cfg.duration_seconds * 1e3  # Duration of the simulation, in ms
     cfg.cache_efficient = True  # Use CVode cache_efficient option to optimize load on many cores

@@ -3,6 +3,7 @@ from RBS_network_models.utils.utils_old.cfg_helper import import_module_from_pat
 import os
 import numpy as np
 import random
+from pathlib import Path
 
 # NOTES ===============================================================
 
@@ -57,7 +58,24 @@ if version == 3.0:
     # import using import_module_from_path
     
     # features data path
-    feature_data_path = '/pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/_scripts/experimental_features.h5'
+    # Priority:
+    #  1) FEATURE_DATA_PATH env var (set by src/batch.py from run_batch reference_data_paths)
+    #  2) __main__.feature_data_path if available (single-sim/manual runs)
+    feature_data_path = os.environ.get('FEATURE_DATA_PATH', None)
+    if not feature_data_path:
+        try:
+            from __main__ import feature_data_path as _main_feature_data_path
+            feature_data_path = _main_feature_data_path
+        except Exception:
+            feature_data_path = None
+
+    if not feature_data_path:
+        raise ValueError(
+            "feature_data_path is not set. Provide reference_data_paths in run_batch.py "
+            "(preferred), or set FEATURE_DATA_PATH in the environment."
+        )
+
+    feature_data_path = str(Path(feature_data_path).expanduser().resolve())
     assert os.path.exists(feature_data_path), f'{feature_data_path} not found'
     
     # Initialize simulation configuration
@@ -88,6 +106,18 @@ if version == 3.0:
     # Import evolutionary parameters
     import_evol_params()
     
+    # Pharmacological scaling factors
+    # 1.0 = no drug effect (baseline), 0.0 = full receptor/channel block
+    # These can be overridden from batch configs to simulate drug conditions:
+    #   AP5+NBQX  -> scale_AMPA=0, scale_NMDA=0
+    #   AP5       -> scale_NMDA=0
+    #   Bicuculline / Gabazine -> scale_GABA=0
+    #   4AP       -> scale_K=0
+    cfg.scale_AMPA = getattr(cfg, 'scale_AMPA', 1.0)
+    cfg.scale_NMDA = getattr(cfg, 'scale_NMDA', 1.0)
+    cfg.scale_GABA = getattr(cfg, 'scale_GABA', 1.0)
+    cfg.scale_K = getattr(cfg, 'scale_K', 1.0)
+
     # set simulation duration
     #cfg.duration_seconds = 1  # Duration of the simulation, in seconds
     #cfg.duration_seconds = 15  # Duration of the simulation, in seconds

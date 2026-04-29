@@ -27,7 +27,7 @@ simConfig, netParams = sim.readCmdLineArgs(
     simConfigDefault=simCfg,
     netParamsDefault=netParams,
 )
-
+# simConfig.verbose = True
 # Run simulation
 sim.createSimulateAnalyze(simConfig = simConfig, netParams = netParams)
 

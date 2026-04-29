@@ -50,8 +50,7 @@ except ImportError:
 try:
     from fitness_schema.schema_v2 import (
         DEFAULT_CONFIG,
-        fit_schema,
-        get_component_weights,
+        fit_schema as DEFAULT_FIT_SCHEMA,
         normalize_schema_weights,
     )
 except ImportError:
@@ -62,19 +61,14 @@ except ImportError:
             sys.path.insert(0, str(_schema_dir))
         from schema_v2 import (
             DEFAULT_CONFIG,
-            fit_schema,
-            get_component_weights,
+            fit_schema as DEFAULT_FIT_SCHEMA,
             normalize_schema_weights,
         )
     except ImportError:
         # Minimal fallback defaults
         DEFAULT_CONFIG = {'max_fitness': 1000.0, 'recording_duration': 300.0}
-        fit_schema = {}
-        get_component_weights = lambda: {
-            'unit_metrics': 0.30, 'quality_metrics': 0.0, 'synchrony': 0.10,
-            'burstlets': 0.25, 'network_bursts': 0.25, 'superbursts': 0.10,
-        }
-        normalize_schema_weights = lambda: fit_schema
+        DEFAULT_FIT_SCHEMA = {}
+        normalize_schema_weights = lambda: DEFAULT_FIT_SCHEMA
 
 # matplotlib — imported lazily in plot function
 import matplotlib
@@ -83,6 +77,13 @@ import matplotlib.pyplot as plt
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _resolve_fit_schema(schema_override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Use the schema passed in kwargs when present, otherwise fall back to the module default."""
+    if isinstance(schema_override, dict):
+        return schema_override
+    return DEFAULT_FIT_SCHEMA
 
 
 # =============================================================================
@@ -193,11 +194,18 @@ def get_sim_data_from_call_stack(kwargs: Dict) -> Dict:
     candidate_path, candidate_label = get_candidate_and_job_path_from_call_stack()
     pkl_path = f'{candidate_path}_data.pkl'
     sim.load(pkl_path)
+
+    sim_cfg_dict = sim.cfg.todict().copy()
+    if hasattr(sim.cfg, 'excit_units'):
+        sim_cfg_dict['excit_units'] = list(getattr(sim.cfg, 'excit_units'))
+    if hasattr(sim.cfg, 'inhib_units'):
+        sim_cfg_dict['inhib_units'] = list(getattr(sim.cfg, 'inhib_units'))
+
     kwargs.update({
         'simData': sim.allSimData.todict().copy(),
         'cellData': sim.net.allCells.copy(),
         'popData': sim.net.allPops.copy(),
-        'simCfg': sim.cfg.todict().copy(),
+        'simCfg': sim_cfg_dict,
         'netParams': sim.net.params.todict().copy(),
         'simLabel': candidate_label,
         'data_file_path': pkl_path,
@@ -215,11 +223,18 @@ def get_sim_data_from_pkl(kwargs: Dict) -> Dict:
     sim_data_path = kwargs['sim_data_path']
     sim.load(sim_data_path)
     candidate_path = sim_data_path.replace('_data.pkl', '')
+
+    sim_cfg_dict = sim.cfg.todict().copy()
+    if hasattr(sim.cfg, 'excit_units'):
+        sim_cfg_dict['excit_units'] = list(getattr(sim.cfg, 'excit_units'))
+    if hasattr(sim.cfg, 'inhib_units'):
+        sim_cfg_dict['inhib_units'] = list(getattr(sim.cfg, 'inhib_units'))
+
     kwargs.update({
         'simData': sim.allSimData.todict().copy(),
         'cellData': sim.net.allCells.copy(),
         'popData': sim.net.allPops.copy(),
-        'simCfg': sim.cfg.todict().copy(),
+        'simCfg': sim_cfg_dict,
         'netParams': sim.net.params.todict().copy(),
         'simLabel': os.path.basename(candidate_path),
         'data_file_path': sim_data_path,
@@ -333,11 +348,20 @@ def _safe_stat(arr):
     return float(np.mean(arr)), float(np.std(arr))
 
 
-def compute_unit_score(sim_features: Dict, exp_data: Dict, recording_duration: float) -> Dict[str, Any]:
+def compute_unit_score(
+    sim_features: Dict,
+    exp_data: Dict,
+    recording_duration: float,
+    sim_excit_units: Optional[List[int]] = None,
+    sim_inhib_units: Optional[List[int]] = None,
+    fit_schema: Optional[Dict[str, Any]] = None,
+    pop_data: Optional[Dict] = None,
+) -> Dict[str, Any]:
     """Compare per-unit metrics between sim and experiment."""
     max_score = DEFAULT_CONFIG.get('max_fitness', 1000.0)
+    fit_schema = _resolve_fit_schema(fit_schema)
 
-    # -- firing rates --
+    # -- firing rates (overall) --
     sim_frs = list(sim_features['firing_rates'].values())
     exp_frs = [
         exp_data['unit_attrs'][uid].get('firing_rate', 0.0)
@@ -345,7 +369,61 @@ def compute_unit_score(sim_features: Dict, exp_data: Dict, recording_duration: f
     ]
     sim_mean_fr, _ = _safe_stat(sim_frs)
     exp_mean_fr, _ = _safe_stat(exp_frs)
-    firing_rate_error = ((sim_mean_fr - exp_mean_fr) ** 2) / max(exp_mean_fr ** 2, 1e-6) * 100.0
+    firing_rate_error_all = ((sim_mean_fr - exp_mean_fr) ** 2) / max(exp_mean_fr ** 2, 1e-6) * 100.0
+
+    # -- firing rates split by class (E/I) --
+    exp_exc_uids = []
+    exp_inh_uids = []
+    for uid in exp_data['unit_ids']:
+        ct = str(exp_data['unit_attrs'][uid].get('cell_type', 'excitatory')).strip().lower()
+        if ct == 'inhibitory':
+            exp_inh_uids.append(uid)
+        else:
+            exp_exc_uids.append(uid)
+
+    exp_exc_frs = [exp_data['unit_attrs'][uid].get('firing_rate', 0.0) for uid in exp_exc_uids]
+    exp_inh_frs = [exp_data['unit_attrs'][uid].get('firing_rate', 0.0) for uid in exp_inh_uids]
+    exp_mean_fr_exc, _ = _safe_stat(exp_exc_frs)
+    exp_mean_fr_inh, _ = _safe_stat(exp_inh_frs)
+
+    sim_fr_map = sim_features.get('firing_rates', {})
+
+    # --- Build sim E/I GID sets from popData (GID-based) ---
+    sim_exc_uids: set = set()
+    sim_inh_uids: set = set()
+    if pop_data:
+        for pop_name, pop_info in pop_data.items():
+            cell_gids = pop_info.get('cellGids', [])
+            if pop_name == 'I':
+                sim_inh_uids.update(int(gid) for gid in cell_gids)
+            else:
+                sim_exc_uids.update(int(gid) for gid in cell_gids)
+        logger.info(f"compute_unit_score: Built sim E/I from popData: "
+                    f"{len(sim_exc_uids)} E, {len(sim_inh_uids)} I")
+    else:
+        # Fallback: use counts from excit/inhib unit lists
+        # E population gets GIDs 0..num_excite-1, I gets the rest
+        num_e = len(sim_excit_units or [])
+        num_i = len(sim_inhib_units or [])
+        if num_e > 0 or num_i > 0:
+            sim_exc_uids = set(range(num_e))
+            sim_inh_uids = set(range(num_e, num_e + num_i))
+            logger.info(f"compute_unit_score: Built sim E/I from unit counts: "
+                        f"{num_e} E, {num_i} I")
+        else:
+            logger.warning("compute_unit_score: No E/I labels available; all units treated as excitatory.")
+            sim_exc_uids = set(int(uid) for uid in sim_fr_map.keys())
+
+    sim_exc_frs = [float(sim_fr_map[uid]) for uid in sim_fr_map if int(uid) in sim_exc_uids]
+    sim_inh_frs = [float(sim_fr_map[uid]) for uid in sim_fr_map if int(uid) in sim_inh_uids]
+    sim_mean_fr_exc, _ = _safe_stat(sim_exc_frs)
+    sim_mean_fr_inh, _ = _safe_stat(sim_inh_frs)
+
+    firing_rate_error_exc = ((sim_mean_fr_exc - exp_mean_fr_exc) ** 2) / max(exp_mean_fr_exc ** 2, 1e-6) * 100.0
+    firing_rate_error_inh = ((sim_mean_fr_inh - exp_mean_fr_inh) ** 2) / max(exp_mean_fr_inh ** 2, 1e-6) * 100.0
+
+    n_exp_exc = len(exp_exc_uids)
+    n_exp_inh = len(exp_inh_uids)
 
     # -- spike counts --
     sim_total = sim_features['total_spikes']
@@ -365,7 +443,6 @@ def compute_unit_score(sim_features: Dict, exp_data: Dict, recording_duration: f
     # -- CV ISI --
     sim_cv = list(sim_features['cv_isi'].values())
     sim_mean_cv, _ = _safe_stat(sim_cv)
-    # No direct CV-ISI in xlsx; compute from ISI violations as proxy
     exp_cvs = []
     for uid in exp_data['unit_ids']:
         attrs = exp_data['unit_attrs'][uid]
@@ -381,39 +458,67 @@ def compute_unit_score(sim_features: Dict, exp_data: Dict, recording_duration: f
 
     # -- E/I ratio --
     exp_types = [
-        exp_data['unit_attrs'][uid].get('cell_type', 'excitatory')
+        str(exp_data['unit_attrs'][uid].get('cell_type', 'excitatory')).strip().lower()
         for uid in exp_data['unit_ids']
     ]
     exp_inh_frac = sum(1 for t in exp_types if t == 'inhibitory') / max(len(exp_types), 1)
-    # For simulated: classify top-20% as inhibitory
-    if sim_frs:
-        thr = np.percentile(sim_frs, 80)
-        sim_inh_frac = sum(1 for fr in sim_frs if fr >= thr) / len(sim_frs)
+    if sim_fr_map:
+        sim_inh_frac = len(sim_inh_uids) / max(len(sim_fr_map), 1)
     else:
         sim_inh_frac = 0.0
     ei_ratio_error = abs(sim_inh_frac - exp_inh_frac) / max(exp_inh_frac, 1e-6) * 100.0
 
     # -- weighted total --
     schema = fit_schema.get('unit_metrics', {}).get('metrics', {})
+
     def _w(name):
         return schema.get(name, {}).get('weight', 1.0)
+
     def _clip(val, name):
         mx = schema.get(name, {}).get('max_val', max_score)
         return min(val, mx)
 
+    fr_w_exc = float(_w('firing_rate_error_exc')) if 'firing_rate_error_exc' in schema else 0.0
+    fr_w_inh = float(_w('firing_rate_error_inh')) if 'firing_rate_error_inh' in schema else 0.0
+    if (fr_w_exc + fr_w_inh) > 0:
+        norm = fr_w_exc + fr_w_inh
+        fr_w_exc /= norm
+        fr_w_inh /= norm
+    else:
+        n_exp_total = max(n_exp_exc + n_exp_inh, 1)
+        fr_w_exc = n_exp_exc / n_exp_total
+        fr_w_inh = n_exp_inh / n_exp_total
+
+    firing_rate_error = fr_w_exc * firing_rate_error_exc + fr_w_inh * firing_rate_error_inh
+
     total = (
-        _w('firing_rate_error')   * _clip(firing_rate_error,   'firing_rate_error') +
-        _w('num_spikes_error')    * _clip(num_spikes_error,    'num_spikes_error') +
-        _w('firing_range_error')  * _clip(firing_range_error,  'firing_range_error') +
-        _w('cv_isi_error')        * _clip(cv_isi_error,        'cv_isi_error') +
-        _w('n_units_error')       * _clip(n_units_error,       'n_units_error') +
-        _w('ei_ratio_error')      * _clip(ei_ratio_error,      'ei_ratio_error')
+        _w('firing_rate_error') * _clip(firing_rate_error, 'firing_rate_error') +
+        _w('firing_rate_error_exc') * _clip(firing_rate_error_exc, 'firing_rate_error_exc') +
+        _w('firing_rate_error_inh') * _clip(firing_rate_error_inh, 'firing_rate_error_inh') +
+        _w('num_spikes_error') * _clip(num_spikes_error, 'num_spikes_error') +
+        _w('firing_range_error') * _clip(firing_range_error, 'firing_range_error') +
+        _w('cv_isi_error') * _clip(cv_isi_error, 'cv_isi_error') +
+        _w('n_units_error') * _clip(n_units_error, 'n_units_error') +
+        _w('ei_ratio_error') * _clip(ei_ratio_error, 'ei_ratio_error')
     )
 
     return {
         'firing_rate_error': float(firing_rate_error),
+        'firing_rate_error_all': float(firing_rate_error_all),
+        'firing_rate_error_exc': float(firing_rate_error_exc),
+        'firing_rate_error_inh': float(firing_rate_error_inh),
         'sim_mean_firing_rate': float(sim_mean_fr),
         'exp_mean_firing_rate': float(exp_mean_fr),
+        'sim_mean_firing_rate_exc': float(sim_mean_fr_exc),
+        'exp_mean_firing_rate_exc': float(exp_mean_fr_exc),
+        'sim_mean_firing_rate_inh': float(sim_mean_fr_inh),
+        'exp_mean_firing_rate_inh': float(exp_mean_fr_inh),
+        'sim_n_exc': int(len(sim_exc_frs)),
+        'sim_n_inh': int(len(sim_inh_frs)),
+        'exp_n_exc': int(n_exp_exc),
+        'exp_n_inh': int(n_exp_inh),
+        'firing_rate_weight_exc': float(fr_w_exc),
+        'firing_rate_weight_inh': float(fr_w_inh),
         'num_spikes_error': float(num_spikes_error),
         'sim_total_spikes': int(sim_total),
         'exp_total_spikes': int(exp_total),
@@ -438,8 +543,10 @@ def compute_synchrony_score(
     exp_data: Dict,
     bin_size: float = 0.01,
     recording_duration: float = 1.0,
+    fit_schema: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Compare synchrony metrics."""
+    fit_schema = _resolve_fit_schema(fit_schema)
     # -- sync_spike_N from experimental attrs --
     def _mean_sync(attr_name):
         vals = [
@@ -615,6 +722,7 @@ def _score_burst_level(
     exp_metrics: Dict,
     recording_duration: float,
     level_name: str,
+    fit_schema: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Score one hierarchical burst level (burstlets / network_bursts / superbursts).
@@ -624,10 +732,13 @@ def _score_burst_level(
 
         metric_error = ((sim_val - exp_val) / max(|exp_val|, 1e-6)) ** 2
 
-    The total score is the **mean squared error** (MSE) across all seven
-    per-metric normalised squared errors, scaled by 100 for readability.
+    The total score is a schema-weighted combination of per-metric errors,
+    scaled by 100 for readability.
+
+    Includes a Victor-Purpura timing error based on event start times.
     """
     _EPS = 1e-6
+    fit_schema = _resolve_fit_schema(fit_schema)
 
     n_sim = len(sim_events)
     n_exp = len(exp_events)
@@ -665,12 +776,39 @@ def _score_burst_level(
     exp_spb = exp_metrics.get('spikes_per_burst', {}).get('mean', 0.0)
     spikes_per_burst_error = ((sim_spb - exp_spb) / max(abs(exp_spb), _EPS)) ** 2
 
-    # -- MSE across all normalised squared errors (×100 for readability) --
-    all_errors = [
-        count_error, rate_error, duration_error, ibi_error,
-        participation_error, intensity_error, spikes_per_burst_error,
-    ]
-    total = float(np.mean(all_errors)) * 100.0
+    # -- timing (Victor-Purpura distance on event starts) --
+    sim_starts = np.array(sorted(ev.get('start', 0.0) for ev in sim_events), dtype=float)
+    exp_starts = np.array(sorted(ev.get('start', 0.0) for ev in exp_events), dtype=float)
+    timing_error = _victor_purpura_distance(sim_starts, exp_starts, q=1.0) / max(n_exp, 1)
+
+    all_errors = {
+        'burst_count_error': count_error,
+        'burst_rate_error': rate_error,
+        'duration_error': duration_error,
+        'ibi_error': ibi_error,
+        'participation_error': participation_error,
+        'intensity_error': intensity_error,
+        'spikes_per_burst_error': spikes_per_burst_error,
+        'timing_error': timing_error,
+    }
+
+    # -- schema-weighted total (fallback: unweighted mean) --
+    schema = fit_schema.get(level_name, {}).get('metrics', {})
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for metric_name, metric_cfg in schema.items():
+        if metric_name not in all_errors:
+            continue
+        w = float(metric_cfg.get('weight', 0.0))
+        max_val = float(metric_cfg.get('max_val', DEFAULT_CONFIG.get('max_fitness', 1000.0)))
+        val = min(float(all_errors[metric_name]), max_val)
+        weighted_sum += w * val
+        weight_total += w
+
+    if weight_total > 0:
+        total = (weighted_sum / weight_total) * 100.0
+    else:
+        total = float(np.mean(list(all_errors.values()))) * 100.0
 
     return {
         'burst_count_error': float(count_error),
@@ -680,6 +818,7 @@ def _score_burst_level(
         'participation_error': float(participation_error),
         'intensity_error': float(intensity_error),
         'spikes_per_burst_error': float(spikes_per_burst_error),
+        'timing_error': float(timing_error),
         'n_sim': n_sim,
         'n_exp': n_exp,
         'sim_rate': float(sim_rate),
@@ -694,6 +833,8 @@ def _score_burst_level(
         'exp_intensity': float(exp_int),
         'sim_spikes_per_burst': float(sim_spb),
         'exp_spikes_per_burst': float(exp_spb),
+        'sim_timing_starts_count': int(len(sim_starts)),
+        'exp_timing_starts_count': int(len(exp_starts)),
         'total_score': float(total),
     }
 
@@ -703,6 +844,7 @@ def compute_hierarchical_burst_scores(
     exp_spike_data: Dict[int, np.ndarray],
     recording_duration: float,
     burst_params: Optional[Dict] = None,
+    fit_schema: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Run parameter_free_burst_detector on both sim and exp, then score
@@ -713,6 +855,7 @@ def compute_hierarchical_burst_scores(
     min_burstlet_participation=0.05 for pre-burstlet detection.
     """
     bp = burst_params or {}
+    fit_schema = _resolve_fit_schema(fit_schema)
 
     # Main burst detection (threshold=45)
     sim_bursts = _run_burst_detector(
@@ -732,6 +875,7 @@ def compute_hierarchical_burst_scores(
         exp_met  = exp_bursts.get(level, {}).get('metrics', {})
         results[level] = _score_burst_level(
             sim_evts, exp_evts, sim_met, exp_met, recording_duration, level,
+            fit_schema=fit_schema,
         )
 
     # ------------------------------------------------------------------
@@ -754,6 +898,7 @@ def compute_hierarchical_burst_scores(
     results['pre_burstlets'] = _score_burst_level(
         sim_pre_evts, exp_pre_evts, sim_pre_met, exp_pre_met,
         recording_duration, 'pre_burstlets',
+        fit_schema=fit_schema,
     )
 
     sim_pre_threshold = sim_pre_bursts.get('plot_data', {}).get('threshold', None)
@@ -887,7 +1032,7 @@ def compute_hierarchical_burst_scores_simple_v2(
     exp_spike_data: Dict[int, np.ndarray],
     recording_duration: float,
     burst_params: Optional[Dict] = None,
-    level_weights: Optional[Dict[str, Dict[str, float]]] = None,
+    fit_schema: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Simplified hierarchical burst scoring **v2**.
@@ -938,8 +1083,9 @@ def compute_hierarchical_burst_scores_simple_v2(
         ``timing_score``, and the ``weights`` that were used.
     """
     bp = burst_params or {}
+    fit_schema = _resolve_fit_schema(fit_schema)
 
-    sim_bursts = _run_burst_detector(sim_spike_data, min_burstlet_participation=0.05,base_threshold_multiplier = 45, **bp)
+    sim_bursts = _run_burst_detector(sim_spike_data, min_burstlet_participation=0.05, base_threshold_multiplier=45, **bp)
     exp_bursts = _run_burst_detector(exp_spike_data, base_threshold_multiplier=45, **bp)
 
     # --- Early exit: penalise simulations with a superburst in the first 2.5 s ---
@@ -960,16 +1106,17 @@ def compute_hierarchical_burst_scores_simple_v2(
                 'n_exp': len(exp_bursts.get(level, {}).get('events', [])),
                 'count_score': _max_score,
                 'timing_score': _max_score,
+                'peak_width_score': _max_score,
                 'total_score': _max_score,
-                'weights': {'count': 0.5, 'timing': 0.5},
+                'weights': {'count': 0.4, 'timing': 0.2, 'peak_width': 0.4},
             }
             for level in _levels
         }
         _r['pre_burstlets'] = {
             'n_sim': 0, 'n_exp': 0,
-            'count_score': _max_score, 'timing_score': _max_score,
+            'count_score': _max_score, 'timing_score': _max_score, 'peak_width_score': _max_score,
             'total_score': _max_score,
-            'weights': {'count': 0.5, 'timing': 0.5},
+            'weights': {'count': 0.4, 'timing': 0.2, 'peak_width': 0.4},
             'sim_threshold': None, 'exp_threshold': None,
         }
         _r['mse'] = _max_score
@@ -984,8 +1131,38 @@ def compute_hierarchical_burst_scores_simple_v2(
         _r['exp_plot_data'] = exp_bursts.get('plot_data', {})
         return _r
 
-    default_w = {'count': 0.5, 'timing': 0.5}
-    lw = level_weights or {}
+    default_w = {'count': 0.4, 'timing': 0.2, 'peak_width': 0.4}
+
+    def _weights_from_schema_dict(schema_dict: Dict[str, Any], level_name: str) -> Dict[str, float]:
+        # schema_v2-style structure: fit_schema[level]['metrics'][metric]['weight']
+        # if pre_burstlets missing, reuse burstlets metric weights
+        level_block = schema_dict.get(level_name)
+        if level_block is None and level_name == 'pre_burstlets':
+            level_block = schema_dict.get('burstlets')
+
+        metrics = level_block.get('metrics', {}) if isinstance(level_block, dict) else {}
+        return {
+            'count': float(metrics.get('burst_count_error', {}).get('weight', 0.0)),
+            'timing': float(metrics.get('timing_error', {}).get('weight', 0.0)),
+            # Requested mapping: duration_error weight drives spike-width term
+            'peak_width': float(metrics.get('duration_error', {}).get('weight', 0.0)),
+        }
+
+    def _resolve_weights(level_name: str) -> Dict[str, float]:
+        schema_w = _weights_from_schema_dict(fit_schema, level_name)
+
+        if float(sum(schema_w.values())) <= 0:
+            schema_w = default_w.copy()
+
+        w = schema_w
+        s = float(w.get('count', 0.0) + w.get('timing', 0.0) + w.get('peak_width', 0.0))
+        if s <= 0:
+            return schema_w
+        return {
+            'count': float(w.get('count', 0.0)) / s,
+            'timing': float(w.get('timing', 0.0)) / s,
+            'peak_width': float(w.get('peak_width', 0.0)) / s,
+        }
 
     levels = ['burstlets', 'network_bursts', 'superbursts']
     results = {}
@@ -1010,19 +1187,30 @@ def compute_hierarchical_burst_scores_simple_v2(
         # else:
         #     timing_vp = 1000.0
 
+        # --- Peak width score: relative error of mean peak width ---
+        sim_peak_widths = [max(0.0, float(ev.get('peak_width_s', 0.0))) for ev in sim_events]
+        exp_peak_widths = [max(0.0, float(ev.get('peak_width_s', 0.0))) for ev in exp_events]
+        sim_mean_peak_width = float(np.mean(sim_peak_widths)) if sim_peak_widths else 0.0
+        exp_mean_peak_width = float(np.mean(exp_peak_widths)) if exp_peak_widths else 0.0
+        peak_width_se = abs(sim_mean_peak_width - exp_mean_peak_width) / max(exp_mean_peak_width, 1e-6)
+
         # --- Combined score for this level ---
-        w = lw.get(level, default_w)
-        w_count  = w.get('count',  0.5)
-        w_timing = w.get('timing', 0.5)
-        level_score = (w_count * count_se + w_timing * timing_vp)*100
+        w = _resolve_weights(level)
+        w_count = w['count']
+        w_timing = w['timing']
+        w_peak_width = w['peak_width']
+        level_score = (w_count * count_se + w_timing * timing_vp + w_peak_width * peak_width_se) * 100
 
         results[level] = {
             'n_sim': n_sim,
             'n_exp': n_exp,
             'count_score': count_se,
             'timing_score': timing_vp,
+            'peak_width_score': peak_width_se,
+            'sim_mean_peak_width': sim_mean_peak_width,
+            'exp_mean_peak_width': exp_mean_peak_width,
             'total_score': level_score,
-            'weights': {'count': w_count, 'timing': w_timing},
+            'weights': {'count': w_count, 'timing': w_timing, 'peak_width': w_peak_width},
         }
         level_scores.append(level_score)
 
@@ -1034,8 +1222,8 @@ def compute_hierarchical_burst_scores_simple_v2(
     # Pre-burstlet score (lower threshold = 1.2×)
     # ------------------------------------------------------------------
     # pre_bp = {**bp, 'base_threshold_multiplier': 1.2}
-    sim_pre_bursts = _run_burst_detector(sim_spike_data,base_threshold_multiplier= 15,min_burstlet_participation=0.05 )
-    exp_pre_bursts = _run_burst_detector(exp_spike_data ,base_threshold_multiplier= 15,min_burstlet_participation=0.05)
+    sim_pre_bursts = _run_burst_detector(sim_spike_data,base_threshold_multiplier= 30,min_burstlet_participation=0.05 )
+    exp_pre_bursts = _run_burst_detector(exp_spike_data ,base_threshold_multiplier= 30,min_burstlet_participation=0.05)
 
     sim_pre_events = sim_pre_bursts.get('burstlets', {}).get('events', [])
     exp_pre_events = exp_pre_bursts.get('burstlets', {}).get('events', [])
@@ -1052,8 +1240,14 @@ def compute_hierarchical_burst_scores_simple_v2(
     # else:
     #     pre_timing_vp = 10000.0
 
-    pre_w = lw.get('pre_burstlets', default_w)
-    pre_score = (pre_w.get('count', 0.5) * pre_count_se + pre_w.get('timing', 0.5) * pre_timing_vp)*100
+    sim_pre_peak_widths = [max(0.0, float(ev.get('peak_width_s', 0.0))) for ev in sim_pre_events]
+    exp_pre_peak_widths = [max(0.0, float(ev.get('peak_width_s', 0.0))) for ev in exp_pre_events]
+    sim_pre_mean_peak_width = float(np.mean(sim_pre_peak_widths)) if sim_pre_peak_widths else 0.0
+    exp_pre_mean_peak_width = float(np.mean(exp_pre_peak_widths)) if exp_pre_peak_widths else 0.0
+    pre_peak_width_se = abs(sim_pre_mean_peak_width - exp_pre_mean_peak_width) / max(exp_pre_mean_peak_width, 1e-6)
+
+    pre_w = _resolve_weights('pre_burstlets')
+    pre_score = (pre_w['count'] * pre_count_se + pre_w['timing'] * pre_timing_vp + pre_w['peak_width'] * pre_peak_width_se) * 100
 
     sim_pre_threshold = sim_pre_bursts.get('plot_data', {}).get('threshold', None)
     exp_pre_threshold = exp_pre_bursts.get('plot_data', {}).get('threshold', None)
@@ -1063,8 +1257,11 @@ def compute_hierarchical_burst_scores_simple_v2(
         'n_exp': n_exp_pre,
         'count_score': pre_count_se,
         'timing_score': pre_timing_vp,
+        'peak_width_score': pre_peak_width_se,
+        'sim_mean_peak_width': sim_pre_mean_peak_width,
+        'exp_mean_peak_width': exp_pre_mean_peak_width,
         'total_score': pre_score,
-        'weights': {'count': pre_w.get('count', 0.5), 'timing': pre_w.get('timing', 0.5)},
+        'weights': {'count': pre_w['count'], 'timing': pre_w['timing'], 'peak_width': pre_w['peak_width']},
         'sim_threshold': sim_pre_threshold,
         'exp_threshold': exp_pre_threshold,
     }
@@ -1109,7 +1306,10 @@ def plot_fitness_comparison(
     burst_results: Dict,
     save_path: str,
     title_prefix: str = "",
-):
+    sim_excit_units: Optional[List[int]] = None,
+    sim_inhib_units: Optional[List[int]] = None,
+    pop_data: Optional[Dict] = None,
+) -> None:
     """
     Generate a multi-panel plot:
         Row 1: Simulated raster
@@ -1120,14 +1320,26 @@ def plot_fitness_comparison(
     fig, axes = plt.subplots(4, 1, figsize=(16, 14), sharex=True)
     ax_sim_raster, ax_sim_net, ax_exp_raster, ax_exp_net = axes
 
-    # --- Build cell_types for simulated data (top 20% FR = inhibitory) ---
+    # --- Build cell_types for simulated data from popData GID ranges ---
     sim_cell_types = {}
-    sim_frs = sim_features.get('firing_rates', {})
-    if sim_frs:
-        fr_values = list(sim_frs.values())
-        thr = np.percentile(fr_values, 80) if fr_values else 0.0
-        for uid, fr in sim_frs.items():
-            sim_cell_types[uid] = 'inhibitory' if fr >= thr else 'excitatory'
+    if pop_data:
+        for pop_name, pop_info in pop_data.items():
+            cell_gids = pop_info.get('cellGids', [])
+            ct = 'inhibitory' if pop_name == 'I' else 'excitatory'
+            for gid in cell_gids:
+                sim_cell_types[int(gid)] = ct
+        logger.info(f"Built sim_cell_types from popData: "
+                    f"{sum(1 for v in sim_cell_types.values() if v == 'excitatory')} E, "
+                    f"{sum(1 for v in sim_cell_types.values() if v == 'inhibitory')} I")
+    else:
+        # Fallback: E population gets GIDs 0..num_excite-1, I gets the rest
+        num_e = len(sim_excit_units or [])
+        num_i = len(sim_inhib_units or [])
+        for gid in range(num_e):
+            sim_cell_types[gid] = 'excitatory'
+        for gid in range(num_e, num_e + num_i):
+            sim_cell_types[gid] = 'inhibitory'
+        logger.info(f"Built sim_cell_types from unit counts: {num_e} E, {num_i} I")
 
     # --- Build cell_types for experimental data ---
     exp_cell_types = {}
@@ -1135,9 +1347,6 @@ def plot_fitness_comparison(
         ct = exp_data.get('unit_attrs', {}).get(uid, {}).get('cell_type', 'excitatory')
         exp_cell_types[uid] = ct
     
-    sim_cell_types = exp_cell_types
-
-
     # --- Sim raster ---
     _plot_raster(ax_sim_raster, sim_features['spike_data'],
                  title=f"{title_prefix}Simulated Raster",
@@ -1192,8 +1401,20 @@ def plot_fitness_comparison(
 
 
 def _plot_raster(ax, spike_data, title="", cell_types=None):
-    """Clean raster plot — one row per unit, color-coded by cell type."""
-    units = sorted(spike_data.keys())
+    """Clean raster plot — one row per unit, color-coded by cell type.
+    Units are sorted by cell type: excitatory first (y=0..numExc-1),
+    then inhibitory (y=numExc..), with a dashed separator line."""
+    if cell_types is not None:
+        exc_units = sorted(uid for uid in spike_data.keys()
+                           if cell_types.get(uid, 'excitatory') != 'inhibitory')
+        inh_units = sorted(uid for uid in spike_data.keys()
+                           if cell_types.get(uid, 'excitatory') == 'inhibitory')
+        units = exc_units + inh_units
+        n_exc = len(exc_units)
+    else:
+        units = sorted(spike_data.keys())
+        n_exc = None
+
     for y, uid in enumerate(units):
         times = spike_data[uid]
         if len(times) == 0:
@@ -1213,6 +1434,11 @@ def _plot_raster(ax, spike_data, title="", cell_types=None):
     ax.set_title(title, fontsize=10)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
+
+    # Draw separator line between E and I populations
+    if n_exc is not None and 0 < n_exc < len(units):
+        ax.axhline(y=n_exc - 0.5, color='black', linestyle='--',
+                   linewidth=0.8, alpha=0.6)
 
     # Legend for cell types and burst overlays
     if cell_types is not None:
@@ -1310,19 +1536,19 @@ def fitnessFunc_v2(
     # max_score = DEFAULT_CONFIG.get('max_fitness', 10000.0)
     max_score = 30000.0
 
-    # --- weights ---
+    # --- weights: read top-level weights directly from fit_schema ---
     if weights is None:
-        try:
-            weights = get_component_weights()
-        except Exception:
-            weights = {
-                'unit_metrics': 0.30, 'quality_metrics': 0.0, 'synchrony': 0.10,
-                'pre_burstlets': 0.15, 'burstlets': 0.20, 'network_bursts': 0.20, 'superbursts': 0.05,
-            }
+        _active_schema = kwargs.get('fit_schema', None) or DEFAULT_FIT_SCHEMA
+        weights = {
+            name: float(comp.get('weight', 0.0))
+            for name, comp in _active_schema.items()
+            if isinstance(comp, dict)
+        }
     total_w = sum(weights.values())
-    weights = {k: v / total_w for k, v in weights.items()}
+    weights = {k: v / total_w for k, v in weights.items()} if total_w > 0 else weights
 
     if config is None:
+        print()
         config = DEFAULT_CONFIG.copy()
 
     simulated_data = None
@@ -1345,6 +1571,7 @@ def fitnessFunc_v2(
                         sim.load(simulated_data_path)
                         simulated_data = sim.allSimData.todict().copy()
                         kwargs['simData'] = simulated_data
+                        kwargs['simCfg'] = sim.cfg.todict().copy()
                     else:
                         simulated_data = np.load(simulated_data_path, allow_pickle=True)
                 elif isinstance(simulated_data_path, dict):
@@ -1389,30 +1616,39 @@ def fitnessFunc_v2(
         # ----------------------------------------------------------------
         # 4. Compute scores
         # ----------------------------------------------------------------
+        fit_schema = kwargs.get('fit_schema', None)
+
         logger.info("Computing unit metrics")
-        unit_results = compute_unit_score(sim_features, exp_data, recording_duration)
+        unit_results = compute_unit_score(
+            sim_features,
+            exp_data,
+            recording_duration,
+            sim_excit_units=kwargs.get('excit_units'),
+            sim_inhib_units=kwargs.get('inhib_units'),
+            fit_schema=fit_schema,
+            pop_data=kwargs.get('popData'),
+        )
 
         logger.info("Computing synchrony metrics")
         sync_results = compute_synchrony_score(
             sim_features['spike_data'], exp_data,
             bin_size=config.get('synchrony', {}).get('bin_size', 0.01),
             recording_duration=recording_duration,
+            fit_schema=fit_schema,
         )
 
         logger.info("Computing hierarchical burst metrics")
         burst_params = config.get('hierarchical_bursts', {})
         burst_params = {}
-        # use_simple_burst_scoring = kwargs.get('use_simple_burst_scoring', False)
-        use_simple_burst_scoring = False
-        use_v2_burst_scoring = True
+        use_simple_burst_scoring = kwargs.get('use_simple_burst_scoring', False)
+        use_v2_burst_scoring = kwargs.get('use_v2_burst_scoring', True)
         # import pdb; pdb.set_trace()
         if use_v2_burst_scoring:
-            logger.info("Using simple burst scoring v2 (count + timing MSE)")
-            burst_level_weights = kwargs.get('burst_level_weights', None)
+            logger.info("Using simple burst scoring v2 (schema-driven weights for count/timing/spike-width)")
             burst_results = compute_hierarchical_burst_scores_simple_v2(
                 sim_features['spike_data'], exp_data['spike_data'],
                 recording_duration, burst_params,
-                level_weights=burst_level_weights,
+                fit_schema=fit_schema,
             )
         elif use_simple_burst_scoring:
             logger.info("Using simple burst scoring (event count MSE)")
@@ -1425,6 +1661,7 @@ def fitnessFunc_v2(
             burst_results = compute_hierarchical_burst_scores(
                 sim_features['spike_data'], exp_data['spike_data'],
                 recording_duration, burst_params,
+                fit_schema=fit_schema,
             )
 
         burstlet_score      = burst_results['burstlets']['total_score']
@@ -1531,6 +1768,9 @@ def fitnessFunc_v2(
                     sim_features, exp_data, burst_results,
                     save_path=plot_path,
                     title_prefix=f"Fitness={fitness:.2f} | ",
+                    sim_excit_units=kwargs.get('excit_units'),
+                    sim_inhib_units=kwargs.get('inhib_units'),
+                    pop_data=kwargs.get('popData'),
                 )
             except Exception as e:
                 logger.warning(f"Plotting failed: {e}")

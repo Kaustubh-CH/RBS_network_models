@@ -1,5 +1,5 @@
 """
-Fitness Schema v2 — Experimental-H5-Aware
+Fitness Schema v1 === Focused on timing of bursts events
 ==========================================
 
 Schema aligned with experimental_features.h5 produced by create_experimental_target.py.
@@ -40,7 +40,7 @@ fit_schema = {
     # 1. Per-unit spiking metrics (from xlsx / computed on-the-fly)
     # ------------------------------------------------------------------
     'unit_metrics': {
-        'weight': 0.40,
+        'weight': 0.20,
         'description': 'Single-unit firing property comparison',
         'metrics': {
             'firing_rate_error': {
@@ -166,7 +166,7 @@ fit_schema = {
     # 4-6. Hierarchical burst levels (parameter_free_burst_detector)
     # ------------------------------------------------------------------
     'burstlets': {
-        'weight': 0.20,
+        'weight': 0.30,
         'description': 'Fast, small bursts (hierarchical level 1)',
         'metrics': {
             'burst_rate_error': {
@@ -176,13 +176,13 @@ fit_schema = {
                 'description': 'Error in burstlet rate (events/s)',
             },
             'burst_count_error': {
-                'weight': 0.45,
+                'weight': 0.20,
                 'min_val': 0.0,
                 'max_val': 100.0,
                 'description': 'Normalized error in total burstlet count',
             },
             'duration_error': {
-                'weight': 0.25,
+                'weight': 0.20,
                 'min_val': 0.0,
                 'max_val': 5.0,
                 'description': 'Error in mean burstlet duration (s)',
@@ -200,7 +200,7 @@ fit_schema = {
                 'description': 'Error in mean spikes per burstlet',
             },
             'timing_error': {
-                'weight': 0.30,
+                'weight': 0.60,
                 'min_val': 0.0,
                 'max_val': 10.0,
                 'description': 'Victor-Purpura timing distance on burstlet start times',
@@ -219,13 +219,13 @@ fit_schema = {
                 'description': 'Error in network burst rate (events/s)',
             },
             'burst_count_error': {
-                'weight': 0.45,
+                'weight': 0.20,
                 'min_val': 0.0,
                 'max_val': 100.0,
                 'description': 'Normalized error in network burst count',
             },
             'duration_error': {
-                'weight': 0.25,
+                'weight': 0.20,
                 'min_val': 0.0,
                 'max_val': 10.0,
                 'description': 'Error in mean network burst duration (s)',
@@ -249,7 +249,7 @@ fit_schema = {
                 'description': 'Error in synchrony energy / intensity',
             },
             'timing_error': {
-                'weight': 0.30,
+                'weight': 0.60,
                 'min_val': 0.0,
                 'max_val': 10.0,
                 'description': 'Victor-Purpura timing distance on network-burst start times',
@@ -289,7 +289,7 @@ fit_schema = {
     },
 
     'pre_burstlets': {
-        'weight': 0.20,
+        'weight': 0.30,
         'description': 'Pre-detection burstlets (using permissive threshold)',
         'metrics': {
             'burst_rate_error': {
@@ -299,13 +299,13 @@ fit_schema = {
                 'description': 'Error in burstlet rate (events/s)',
             },
             'burst_count_error': {
-                'weight': 0.45,
+                'weight': 0.20,
                 'min_val': 0.0,
                 'max_val': 100.0,
                 'description': 'Normalized error in total burstlet count',
             },
             'duration_error': {
-                'weight': 0.25,
+                'weight': 0.20,
                 'min_val': 0.0,
                 'max_val': 5.0,
                 'description': 'Error in mean burstlet duration (s)',
@@ -323,7 +323,7 @@ fit_schema = {
                 'description': 'Error in mean spikes per burstlet',
             },
             'timing_error': {
-                'weight': 0.30,
+                'weight': 0.60,
                 'min_val': 0.0,
                 'max_val': 10.0,
                 'description': 'Victor-Purpura timing distance on burstlet start times',

@@ -1,5 +1,5 @@
 """
-Fitness Schema v2 — Experimental-H5-Aware
+Fitness Schema v3 === More weightage to Inhibitory firing rate
 ==========================================
 
 Schema aligned with experimental_features.h5 produced by create_experimental_target.py.
@@ -40,7 +40,7 @@ fit_schema = {
     # 1. Per-unit spiking metrics (from xlsx / computed on-the-fly)
     # ------------------------------------------------------------------
     'unit_metrics': {
-        'weight': 0.40,
+        'weight': 0.50,
         'description': 'Single-unit firing property comparison',
         'metrics': {
             'firing_rate_error': {
@@ -50,19 +50,19 @@ fit_schema = {
                 'description': 'Legacy aggregate firing-rate error (kept for compatibility)',
             },
             'firing_rate_error_exc': {
-                'weight': 0.30,
+                'weight': 0.20,
                 'min_val': 0.0,
                 'max_val': 20000.0,
                 'description': 'Error in excitatory mean firing rate (Hz)',
             },
             'firing_rate_error_inh': {
-                'weight': 0.30,
+                'weight': 0.60,
                 'min_val': 0.0,
                 'max_val': 20000.0,
                 'description': 'Error in inhibitory mean firing rate (Hz)',
             },
             'num_spikes_error': {
-                'weight': 0.40,
+                'weight': 0.20,
                 'min_val': 0.0,
                 'max_val': 130.0,
                 'description': 'Normalized error in total spike counts across units',
@@ -166,7 +166,7 @@ fit_schema = {
     # 4-6. Hierarchical burst levels (parameter_free_burst_detector)
     # ------------------------------------------------------------------
     'burstlets': {
-        'weight': 0.20,
+        'weight': 0.10,
         'description': 'Fast, small bursts (hierarchical level 1)',
         'metrics': {
             'burst_rate_error': {
@@ -209,7 +209,7 @@ fit_schema = {
     },
 
     'network_bursts': {
-        'weight': 0.20,
+        'weight': 0.10,
         'description': 'Merged medium-scale bursts (hierarchical level 2)',
         'metrics': {
             'burst_rate_error': {

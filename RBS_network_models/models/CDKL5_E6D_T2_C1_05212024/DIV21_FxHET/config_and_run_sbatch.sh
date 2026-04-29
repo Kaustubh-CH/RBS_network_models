@@ -1,6 +1,6 @@
 #!/bin/bash -l
 #SBATCH -N 1
-#SBATCH -t 24:00:00
+#SBATCH -t 4:30:00
 #SBATCH -q regular
 #SBATCH -J Evolutionary
 #SBATCH -L SCRATCH,cfs
@@ -11,6 +11,7 @@
 #SBATCH -A m2043
 
 # updated # aw 2025-04-21 03:36:06
+cd /pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models
 module load conda
 conda activate preshifter
 
@@ -35,6 +36,6 @@ export MPI_LIB_NRN_PATH=$(find $MPICH_DIR -name libmpi.so | head -1)
 # from neuron import h
 # print("MPI load OK, h =", h)
 # EOF
-
+name="CDKL5_seed_large_02_w1_focus_InhFR_v2"
 #
-python /pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_FxHET/run_batch.py
+python /pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_FxHET/run_batch.py $name evol_params_large

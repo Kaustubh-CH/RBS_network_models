@@ -1,6 +1,6 @@
 from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.batch import batchEvol_v2 as batchEvol
 # from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.evol_params_from_seed_v2 import params
-from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.evol_params_from_seed_v3_large_v3 import params
+from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.evol_params_large_limited_tau import params
 # from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.evol_params_from_seed_v3_large import params
 # from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.evol_params_from_seed_trial389 import params
 from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.conv_params import conv_params
@@ -8,16 +8,29 @@ from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.conv_par
 # /RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_FxHET/src
 #from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_WT.seeds import seeds
 #from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_WT.seeds_2 import seeds
-# from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.seeds_5 import seeds
-from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.seeds_6 import seeds
+from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.seeds_5 import seeds
 #from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_WT.fitness_schema.schema_1 import fit_schema
-from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.fitness_schema.schema_v3 import fit_schema
-
+# from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.fitness_schema.schema_v2 import fit_schema
 # from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.fitness_schema.schema_3 import fit_schema
+
 import netpyne
 import os
 import shutil
+import argparse
+import importlib
 
+parser = argparse.ArgumentParser(description="Run Batch Optimization")
+parser.add_argument('--schema_name', type=str, required=True, help='Name of the schema (e.g. schema_v1, schema_v5)')
+args = parser.parse_args()
+
+# Dynamically import fit_schema based on schema_name
+schema_module_path = "RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.fitness_schema.multi_schema.{0}".format(args.schema_name)
+schema_module = importlib.import_module(schema_module_path)
+fit_schema = schema_module.fit_schema
+
+# RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_FxHET/fitness_schema/multi_schema/schema_v5.py
+# RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.fitness_schema.multi_schema.schema_v5
+print(fit_schema)
 try:
     from mpi4py import MPI
     print("MPI4PY is installed, running in parallel mode")
@@ -27,23 +40,11 @@ except ImportError:
     pass
 
 # main ========================================================================================
-import sys
-import importlib
-
-name = sys.argv[1] if len(sys.argv) > 1 else "CDKL5_seed_v3_large_v3_02_w1_v2"
-
-if len(sys.argv) > 2:
-    params_module_name = sys.argv[2]
-    module_path = f"RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.{params_module_name}"
-    print(f"Overwriting params using module: {module_path}")
-    params_mod = importlib.import_module(module_path)
-    params = params_mod.params
-
 kwargs = {
     'parameter_space': params,
     'batchFolder': (
         #'/pscratch/sd/a/adammwea/workspace/RBS_network_models/data/Organoid_RTT_R270X/DIV112_WT/batch_runs'
-        f'/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/{name}/batch_runs'
+        '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_large_limited_tau_02_w1_v1_multi_score/batch_runs_{0}'.format(args.schema_name)
         # '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_Mar_25_seed_v3_large_02_w1_v3'
         # '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/KCNT_Test_Mar_03_seed_params_nostd_v4/batch_runs'
         ),
@@ -51,8 +52,7 @@ kwargs = {
         #'/global/homes/a/adammwea/pscratch/zoutputs/CDKL5-E6D_T2_C1_05212024/CDKL5-E6D_T2_C1_05212024/240611/M08029/Network/000091/network_analysis/well005/metrics.npy'
         # '/pscratch/sd/k/ktub1999/networkSimulations/z_analyzed_data/network_analysis/well000/metrics.npy'
         # '/pscratch/sd/k/ktub1999/networkSimulatons_Sonnet/experimental_data_v2.h5'
-        '/pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/processed_experimental_targets/CDKL5_002_well000.h5'
-        # '/pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/processed_experimental_targets/CDKL5_011Imm_well001.h5'
+        '/pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/processed_experimental_targets/CDKL5_002_well001.h5'
         # '/pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/_scripts/experimental_features_20.h5'
         },
     'runCfg_script_path': (
@@ -61,13 +61,13 @@ kwargs = {
         ),
     "conv_params": conv_params,
     "mega_params": mega_params,
-    "seeds": seeds,
+    # "seeds": seeds,
     # "seeds": None,
     "fit_schema": fit_schema,
     "plot_sim": True,
     "maxiter_wait":40, # number of iter to wait for job completion
     "use_v2_burst_scoring": True, # whether to use the new burst scoring method that includes timing MSE, or the old method that only looks at burst counts.
-    "maxiters": 2,
+    
     # tags
     # older tags before implementing in run_batch.py - previously implemented in src/batch.py in hacky way.
         #tag = 'test'

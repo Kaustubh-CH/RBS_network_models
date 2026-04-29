@@ -9,9 +9,9 @@
 # pip install -e /global/homes/a/adammwea/dev/MEA_Analysis
 
 # load the correct compiler environment
-# module swap PrgEnv-${PE_ENV,,} PrgEnv-gnu
-# module load cray-mpich
-# echo $MPICH_DIR
+module swap PrgEnv-${PE_ENV,,} PrgEnv-gnu
+module load cray-mpich
+echo $MPICH_DIR
 
 # two main subdirs under $MPICH_DIR hold the .so files:
 
@@ -29,9 +29,10 @@
 cd networkSimulations/RBS_network_models/
 module load conda
 conda activate preshifter
-
+name=CDKL5_seed_large_limited_tau_02_w0_focus_InhFR_ap5nbqx
+params=evol_params_large_limited_tau
 export LD_LIBRARY_PATH=$MPICH_DIR/ofi/gnu/$(gcc -dumpversion)/lib:$MPICH_DIR/gtl/lib:$LD_LIBRARY_PATH
 export MPI_LIB_NRN_PATH=$(find $MPICH_DIR -name libmpi.so | head -1)
-python /pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_FxHET/run_batch.py
+python /pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_FxHET/run_batch.py $name  $params
 
 #  salloc -A m2043_g -q interactive -C gpu -t 04:00:00 --nodes=1 --gpus=1 --image=nersc/pytorch:ngc-21.08-v2

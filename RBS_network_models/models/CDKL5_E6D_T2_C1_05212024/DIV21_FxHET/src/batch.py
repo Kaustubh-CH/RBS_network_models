@@ -85,6 +85,11 @@ def batchEvol_v2(**kwargs):
         # load reference data into global
         reference_data_path = reference_data_list[0] # HACK: for now, this only works for one reference data set - i feel we may want to change this in the future
         kwargs['reference_data_path'] = reference_data_path
+        kwargs['feature_data_path'] = reference_data_path
+
+        # Make feature path available to cfg.py (both local import and spawned MPI ranks)
+        os.environ['FEATURE_DATA_PATH'] = str(reference_data_path)
+        print(f"Set FEATURE_DATA_PATH={os.environ['FEATURE_DATA_PATH']}")
         
         return kwargs
     
@@ -101,6 +106,8 @@ def batchEvol_v2(**kwargs):
             'mega_params': mega_params,
             'plot_sim': kwargs.get('plot_sim', False),
             'reference_data_path': kwargs.get('reference_data_path', None),
+            'excit_units': kwargs.get('excit_units', []),
+            'inhib_units': kwargs.get('inhib_units', []),
             'batching': True,
             
             # compute_network_metrics args
@@ -112,7 +119,7 @@ def batchEvol_v2(**kwargs):
             # nvm these run in series for now, just use 128 
             'max_workers': 128, 
             'burst_sequencing': True,
-
+            'use_v2_burst_scoring': kwargs.get('use_v2_burst_scoring', True),
             #fitness schema
             'fit_schema': kwargs.get('fit_schema', None),
             'seed_fitness': kwargs.get('seed_fitness', None), # necessary for fitness function to do N-factorial
@@ -124,10 +131,10 @@ def batchEvol_v2(**kwargs):
     
     def init_batch_attributes(kwargs):
         # simulation max iteration options -- max iterations before stopping generation
-        time_sleep = 5 # seconds
-        max_wait = 25*5 # minutes
-        maxiter_wait = max_wait * 60 / time_sleep # convert to number of iterations
-        maxiter_wait = 20
+        time_sleep = kwargs.get('time_sleep', 5)  # seconds
+        max_wait_min = kwargs.get('max_wait_min', 25 * 5)  # minutes
+        default_maxiter_wait = int(max_wait_min * 60 / max(time_sleep, 1))
+        maxiter_wait = kwargs.get('maxiter_wait', default_maxiter_wait)
         #b.batchLabel = 'evol' #NOTE: if left unset, batchLabel will be set to datetime at runtime
         
         # pop size options
@@ -135,7 +142,7 @@ def batchEvol_v2(**kwargs):
         #pop_size = 256        
         #pop_size = 128
         # pop_size = 2
-        pop_size = 10
+        pop_size = kwargs.get('pop_size', 10)
 
         # num elites options
         #num_elites = 50
@@ -143,15 +150,16 @@ def batchEvol_v2(**kwargs):
         #num_elites = 128
         #num_elites = 4
         #num_elites = 16
-        num_elites = 32
+        num_elites = kwargs.get('num_elites', 32)
 
         kwargs.update({
             'time_sleep': time_sleep,
-            #'max_wait': max_wait,
+            'max_wait_min': max_wait_min,
             'maxiter_wait': maxiter_wait,
             'pop_size': pop_size,
             'num_elites': num_elites,
         })
+        print(f"Batch wait settings: time_sleep={time_sleep}s, max_wait_min={max_wait_min} min, maxiter_wait={maxiter_wait}")
         return kwargs
     
     def get_seed_cfgs(params, **kwargs):
@@ -241,6 +249,12 @@ def batchEvol_v2(**kwargs):
         # set run configuration 
         run_Cfg_script_path = kwargs.get('runCfg_script_path', None)
         if run_Cfg_script_path is None: raise ValueError("runCfg_script_path must be provided in kwargs")       
+
+        # Use srun only when inside a Slurm job/allocation
+        in_slurm = bool(os.environ.get('SLURM_JOB_ID'))
+        mpi_command = 'MPICH_GPU_SUPPORT_ENABLED=0 srun -N 1' if in_slurm else 'MPICH_GPU_SUPPORT_ENABLED=0'
+        print(f"Detected Slurm job: {in_slurm}. Using mpiCommand='{mpi_command}'")
+
         b.runCfg = {
             'type': 
                 'mpi_direct', 
@@ -253,7 +267,7 @@ def batchEvol_v2(**kwargs):
                 #'mpirun',
                 
                 #'shifter --image=adammwea/netsims_docker:v1'
-                'MPICH_GPU_SUPPORT_ENABLED=0 srun -N 1',
+                mpi_command,
                 # # bind to socket
                 # ' --cpu-bind=verbose,cores'
                 # ' --hint=multithread' # enable multithreading on each core
@@ -271,7 +285,7 @@ def batchEvol_v2(**kwargs):
             #'coresPerNode': 16, #i.e., 4 mpi tasks per sim, @256 cands per gen, @1 cpu per task = 1024 cores. 4 nodes, each with 256 logical cores, allows 1024 cores to be used.
             
             # # aw 2025-04-23 03:37:46 lets try maximizing for 1 sim / socket (i.e. 64 tasks per node)
-            'coresPerNode': 64,
+            'coresPerNode': 128,
             
             'reservation': None,
             #'skip': False, #if rerunning, skip if output files already exist
@@ -299,7 +313,10 @@ def batchEvol_v2(**kwargs):
         cfg_module = import_module_from_path(cfgFile_path)
         network_cool_down = getattr(cfg_module.cfg, 'network_cool_down', 0.0)
         kwargs['network_cool_down'] = network_cool_down
+        kwargs['excit_units'] = list(getattr(cfg_module.cfg, 'excit_units', []))
+        kwargs['inhib_units'] = list(getattr(cfg_module.cfg, 'inhib_units', []))
         print(f'network_cool_down = {network_cool_down} seconds')
+        print(f"cfg excit/inhib counts = {len(kwargs['excit_units'])}/{len(kwargs['inhib_units'])}")
 
         # init batch object
         print('initializing batch object...')
@@ -354,7 +371,7 @@ def batchEvol_v2(**kwargs):
                 'fitnessFuncArgs': fitnessFuncArgs,
                 'maxFitness': 1000,
                 'maxiters': 1000,
-                'maxtime': 3600 * 8,
+                'maxtime': 3600 * 24,
                 'stepsize': 0.1,
                 'sinc': 2,
                 'sdec': 2,
@@ -369,8 +386,8 @@ def batchEvol_v2(**kwargs):
             'fitnessFunc': fitnessFunc,
             'fitnessFuncArgs': fitnessFuncArgs,
             'maxFitness': 10000,
-            'maxiters': 1000,          # total number of trials
-            'maxtime': 3600 * 8,      # 8 hour budget
+            'maxiters': kwargs.get('maxiters', 1000),          # total number of trials
+            'maxtime': 3600 * 24,      # 8 hour budget
             'maxiter_wait': kwargs.get('maxiter_wait', 100),
             'time_sleep': kwargs.get('time_sleep', 15),
             'direction': 'minimize',

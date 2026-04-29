@@ -1,5 +1,5 @@
 """
-Fitness Schema v2 — Experimental-H5-Aware
+Fitness Schema v1 === Balanced from all objectives
 ==========================================
 
 Schema aligned with experimental_features.h5 produced by create_experimental_target.py.
@@ -40,7 +40,7 @@ fit_schema = {
     # 1. Per-unit spiking metrics (from xlsx / computed on-the-fly)
     # ------------------------------------------------------------------
     'unit_metrics': {
-        'weight': 0.40,
+        'weight': 0.20,
         'description': 'Single-unit firing property comparison',
         'metrics': {
             'firing_rate_error': {
@@ -166,7 +166,7 @@ fit_schema = {
     # 4-6. Hierarchical burst levels (parameter_free_burst_detector)
     # ------------------------------------------------------------------
     'burstlets': {
-        'weight': 0.20,
+        'weight': 0.30,
         'description': 'Fast, small bursts (hierarchical level 1)',
         'metrics': {
             'burst_rate_error': {
@@ -289,7 +289,7 @@ fit_schema = {
     },
 
     'pre_burstlets': {
-        'weight': 0.20,
+        'weight': 0.30,
         'description': 'Pre-detection burstlets (using permissive threshold)',
         'metrics': {
             'burst_rate_error': {

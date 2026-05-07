@@ -119,10 +119,14 @@ if version == 3.0:
     cfg.scale_K = getattr(cfg, 'scale_K', 1.0)
 
     # set simulation duration
-    #cfg.duration_seconds = 1  # Duration of the simulation, in seconds
-    #cfg.duration_seconds = 15  # Duration of the simulation, in seconds
-    #cfg.duration_seconds = 65  # Duration of the simulation, in seconds
-    cfg.duration_seconds = 20 # Duration of the simulation, in seconds  #aw 2025-05-18 19:35:47 - now that we're cutting the first 20s of data, I want to make sure I have enough time to get the full response - especially for bursting metrics
+    # T_target_s is selected per-recording when the experimental target h5 is
+    # created (see _scripts/create_experimental_target.py:compute_T_target).
+    # batch.py reads it from the target h5 and exports it via the T_TARGET_S
+    # environment variable; we pick it up here so each fitting run uses the
+    # window length matched to its target. Falls back to 20 s if absent.
+    import os as _os
+    _T_target_env = _os.environ.get('T_TARGET_S', None)
+    cfg.duration_seconds = float(_T_target_env) if _T_target_env else 20.0
 
     # Network cool down period - allows network to stabilize before analysis
     # This time is added to simulation duration but excluded from metric computation

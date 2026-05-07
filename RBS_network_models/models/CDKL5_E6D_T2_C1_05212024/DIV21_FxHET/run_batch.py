@@ -29,15 +29,30 @@ except ImportError:
 # main ========================================================================================
 import sys
 import importlib
+import argparse
 
-name = sys.argv[1] if len(sys.argv) > 1 else "CDKL5_seed_v3_large_v3_02_w1_v2"
+# CLI: optional --T_target override (any flag-style argv is consumed here; the
+# remaining positionals keep the legacy semantics — first = run name, second =
+# params-module override).
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument('--T_target', type=float, default=None,
+                     help='Override target window length in seconds. '
+                          'Wins over network_results.attrs["T_target_s"] from the target h5.')
+_known, _rest = _parser.parse_known_args()
+_positional = [a for a in _rest if not a.startswith('-')]
 
-if len(sys.argv) > 2:
-    params_module_name = sys.argv[2]
+name = _positional[0] if len(_positional) > 0 else "CDKL5_seed_v3_large_v3_02_w1_v2"
+
+if len(_positional) > 1:
+    params_module_name = _positional[1]
     module_path = f"RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.{params_module_name}"
     print(f"Overwriting params using module: {module_path}")
     params_mod = importlib.import_module(module_path)
     params = params_mod.params
+
+T_target_override = _known.T_target  # None unless --T_target N was passed
+if T_target_override is not None:
+    print(f"--T_target override active: T_target_s_override = {T_target_override} s")
 
 kwargs = {
     'parameter_space': params,
@@ -61,13 +76,13 @@ kwargs = {
         ),
     "conv_params": conv_params,
     "mega_params": mega_params,
-    "seeds": seeds,
+    # "seeds": seeds,
     # "seeds": None,
     "fit_schema": fit_schema,
     "plot_sim": True,
-    "maxiter_wait":40, # number of iter to wait for job completion
+    "maxiter_wait":145, # number of iter to wait for job completion
     "use_v2_burst_scoring": True, # whether to use the new burst scoring method that includes timing MSE, or the old method that only looks at burst counts.
-    "maxiters": 2,
+    "maxiters": 10000,
     # tags
     # older tags before implementing in run_batch.py - previously implemented in src/batch.py in hacky way.
         #tag = 'test'
@@ -89,6 +104,7 @@ kwargs = {
     # I think this will work since I can normalize the spiking activity to resist degress and then optimize bursting characteristics based on that.
     'tag': 'spiking_only', # HACK: hacked the fitness function for this to work right now. Will need to fix later.
     'batchLabel': 'batch_2026-04-02', # Set the batchLabel to resume an earlier optuna study run instead of starting from gen 0
+    'T_target_s_override': T_target_override,
     }                       # also added deal breaker. If any one neuron has zeron synaptic connections, it is a deal breaker.
 
 os.makedirs(kwargs['batchFolder'], exist_ok=True)

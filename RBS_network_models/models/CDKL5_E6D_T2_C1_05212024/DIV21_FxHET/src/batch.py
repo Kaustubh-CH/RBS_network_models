@@ -90,7 +90,36 @@ def batchEvol_v2(**kwargs):
         # Make feature path available to cfg.py (both local import and spawned MPI ranks)
         os.environ['FEATURE_DATA_PATH'] = str(reference_data_path)
         print(f"Set FEATURE_DATA_PATH={os.environ['FEATURE_DATA_PATH']}")
-        
+
+        # Pull T_target_s (the per-recording window length picked when the target
+        # h5 was created) out of network_results.attrs and expose it via env so
+        # cfg.py can drive cfg.duration_seconds from it. A CLI override
+        # (run_batch.py --T_target N) wins over the h5 value.
+        T_target_from_h5 = None
+        try:
+            with h5py.File(reference_data_path, 'r') as f:
+                if 'network_results' in f and 'T_target_s' in f['network_results'].attrs:
+                    T_target_from_h5 = float(f['network_results'].attrs['T_target_s'])
+        except Exception as e:
+            print(f"Could not read T_target_s from {reference_data_path}: {e}")
+
+        T_target_override = kwargs.get('T_target_s_override')
+        if T_target_override is not None:
+            T_target_s = float(T_target_override)
+            print(f"Set T_TARGET_S={T_target_s} (CLI override — h5 value was "
+                  f"{T_target_from_h5})")
+        elif T_target_from_h5 is not None:
+            T_target_s = T_target_from_h5
+            print(f"Set T_TARGET_S={T_target_s} (from {reference_data_path})")
+        else:
+            T_target_s = None
+            print("No network_results.attrs['T_target_s'] in target h5 and no CLI "
+                  "override; cfg.duration_seconds will use its default.")
+
+        if T_target_s is not None:
+            os.environ['T_TARGET_S'] = str(T_target_s)
+            kwargs['T_target_s'] = T_target_s
+
         return kwargs
     
     def init_fitnessFunc_args(**kwargs):

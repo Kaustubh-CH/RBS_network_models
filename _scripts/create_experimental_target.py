@@ -15,7 +15,13 @@ import pandas as pd
 import h5py
 import json
 import argparse
+import sys
 from pathlib import Path
+
+# Convergence-window helpers live next door in feature_window.py.
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
 
 
 def load_spike_times(spike_times_path):
@@ -86,6 +92,78 @@ def classify_units(df):
     print(f"  Classification threshold (80th percentile): {threshold:.3f} Hz")
     
     return df
+
+
+def compute_T_target(spike_times, cell_types, T_grid=None, schema_path=None):
+    """
+    Pick the smallest grid window length T (excluding T_full) whose rate features
+    minimise a chosen schema's weighted absolute deviation from the same features
+    measured on the full recording. Returns a dict with T_target_s + diagnostics.
+
+    Reuses the helpers in feature_window.py so the math is exactly what
+    the diagnostic plots show.
+    """
+    # Lazy import — keeps create_experimental_target usable without matplotlib
+    # if --no_auto_T is set.
+    from feature_window import (
+        compute_curve, load_schema, schema_fitness_curve, build_grid,
+        DEFAULT_T_GRID, DEFAULT_FOCUS_SCHEMA,
+    )
+
+    T_full = max(
+        (float(np.asarray(t).max()) for t in spike_times.values() if len(t)),
+        default=0.0,
+    )
+    if T_full <= 0:
+        raise ValueError("No spikes — cannot compute T_target.")
+
+    grid = build_grid(T_grid or DEFAULT_T_GRID, T_full)
+    rows = compute_curve(spike_times, cell_types, grid)
+
+    sp = schema_path or DEFAULT_FOCUS_SCHEMA
+    print(f"   Decision schema: {sp}")
+    fs = load_schema(sp)
+    out = schema_fitness_curve(fs, rows)
+    if out is None:
+        print("   ! Decision schema has no rate-error metrics with non-zero weight; "
+              "falling back to T_full.")
+        return {
+            "T_target_s": float(T_full),
+            "T_full_s": float(T_full),
+            "method": "fallback_T_full",
+            "schema": str(sp),
+        }
+
+    fitness, terms = out
+    T_arr = np.array([r["T_s"] for r in rows], dtype=float)
+    f_arr = np.array(fitness, dtype=float)
+    best_idx = int(np.argmin(f_arr[:-1])) if len(f_arr) > 1 else 0
+    return {
+        "T_target_s": float(T_arr[best_idx]),
+        "T_full_s": float(T_full),
+        "method": "schema_argmin",
+        "schema": str(sp),
+        "best_fitness": float(f_arr[best_idx]),
+        "T_grid": [float(t) for t in T_arr],
+        "fitness_per_T": [(float(t), float(f)) for t, f in zip(T_arr, f_arr)],
+        "n_rate_terms": int(len(terms)),
+    }
+
+
+def truncate_and_recompute(spike_times, df, T_target):
+    """Cap each unit's spike train at t <= T_target and refresh the per-unit
+    metrics that depend on duration (firing_rate, num_spikes). Quality metrics
+    that come from the sorter (snr, presence_ratio, ...) are intrinsic and
+    left alone."""
+    truncated = {}
+    for u, t in spike_times.items():
+        arr = np.asarray(t)
+        truncated[u] = arr[arr <= T_target]
+
+    df = df.copy()
+    df['num_spikes'] = df['unit_id'].apply(lambda u: int(len(truncated.get(u, []))))
+    df['firing_rate'] = df['num_spikes'] / float(T_target)
+    return truncated, df
 
 
 def deduplicate_units_by_location(df, spike_times, use_z=False, decimals=6):
@@ -276,7 +354,16 @@ def main():
                         help='Use (loc_x, loc_y, loc_z) for duplicate matching (default: x,y only)')
     parser.add_argument('--deduplicate_decimals', type=int, default=6,
                         help='Rounding precision for location matching during deduplication')
-    
+    parser.add_argument('--T_target', type=float, default=None,
+                        help='Manually override the target window length (s). '
+                             'If omitted, auto-detect via convergence sweep.')
+    parser.add_argument('--decision_schema', type=str, default=None,
+                        help='Schema file used to pick T_target (default: schema_v2_equal.py).')
+    parser.add_argument('--T_grid', type=float, nargs='+', default=None,
+                        help='Window-length grid in seconds (default: 10 20 30 45 60 90 120 180 240).')
+    parser.add_argument('--no_auto_T', action='store_true',
+                        help='Disable T_target selection and truncation; keep the full recording.')
+
     args = parser.parse_args()
     
     print("="*60)
@@ -318,16 +405,44 @@ def main():
         )
         print(f"   Remaining units in metrics: {len(df)}")
         print(f"   Remaining units in spike_times: {len(spike_times)}")
-    
+
+    # T_target selection + spike-train truncation
+    print("\n6. Determining target window length T_target_s...")
+    T_info = None
+    if args.no_auto_T and args.T_target is None:
+        print("   --no_auto_T set; skipping window selection (full recording retained).")
+    else:
+        if args.T_target is not None:
+            T_info = {"T_target_s": float(args.T_target), "method": "manual_override",
+                      "schema": None}
+            print(f"   Using manual T_target = {args.T_target} s")
+        else:
+            cell_types = dict(zip(df['unit_id'], df['cell_type']))
+            T_info = compute_T_target(
+                spike_times, cell_types,
+                T_grid=args.T_grid,
+                schema_path=args.decision_schema,
+            )
+            print(f"   Auto-selected T_target = {T_info['T_target_s']} s "
+                  f"(schema = {Path(T_info['schema']).name}, "
+                  f"weighted Δ = {T_info.get('best_fitness', 'n/a')})")
+        T_target = T_info["T_target_s"]
+        print(f"   Truncating spike trains to t <= {T_target} s and refreshing "
+              f"firing_rate / num_spikes in the per-unit attrs.")
+        spike_times, df = truncate_and_recompute(spike_times, df, T_target)
+        # Persist the decision into network_results so it lands in the h5.
+        network_results['T_target_s'] = float(T_target)
+        network_results['T_target_diagnostics'] = T_info
+
     # Create features dictionary
-    print("\n6. Creating features dictionary...")
+    print("\n7. Creating features dictionary...")
     features = create_features_dict(spike_times, df, network_results)
     # Subtract 1 for the _network_results entry
     num_units = len(features) - 1
     print(f"   Created features for {num_units} units")
     
     # Save to HDF5
-    print(f"\n7. Saving to {args.output}...")
+    print(f"\n8. Saving to {args.output}...")
     save_to_hdf5(features, args.output)
     
     print("\n" + "="*60)
@@ -353,11 +468,10 @@ if __name__ == '__main__':
 
 '''
 python /pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/_scripts/create_experimental_target.py \
-    --spike_times /pscratch/sd/k/ktub1999/networkSimulations/MEA_Analysis/results11_Imm/sd/k/ktub1999/networkSimulations/experimental_data/well001/spike_times.npy \
-    --metrics /pscratch/sd/k/ktub1999/networkSimulations/MEA_Analysis/results11_Imm/sd/k/ktub1999/networkSimulations/experimental_data/well001/metrics_curated.xlsx \
-    --network_results /pscratch/sd/k/ktub1999/networkSimulations/MEA_Analysis/results11_Imm/sd/k/ktub1999/networkSimulations/experimental_data/well001/network_results.json \
-    --deduplicate_locations \
-    --output /pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/processed_experimental_targets/CDKL5_011Imm_well001.h5
-    
+  --spike_times      /pscratch/sd/k/ktub1999/networkSimulations/MEA_Analysis/results_CDKL5_02_full/sd/k/ktub1999/networkSimulations/experimental_data/well000/spike_times.npy \
+  --metrics          /pscratch/sd/k/ktub1999/networkSimulations/MEA_Analysis/results_CDKL5_02_full/sd/k/ktub1999/networkSimulations/experimental_data/well000/metrics_curated.xlsx \
+  --network_results  /pscratch/sd/k/ktub1999/networkSimulations/MEA_Analysis/results_CDKL5_02_full/sd/k/ktub1999/networkSimulations/experimental_data/well000/network_results.json \
+  --deduplicate_locations \
+  --output           /pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/processed_experimental_targets/CDKL5_002_well000.h5
 
     '''

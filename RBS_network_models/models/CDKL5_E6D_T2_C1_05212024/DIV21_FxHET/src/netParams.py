@@ -165,7 +165,7 @@ if version == 3.0:
                         'mechs': {
                             'hh': {
                                 'gnabar': props['gnabar'][i],
-                                'gkbar': props['gkbar'][i],
+                                'gkbar': props['gkbar'][i] * cfg.scale_K,
                                 'gl': 0.003, 'el': -70,
                             }
                         },
@@ -225,49 +225,65 @@ if version == 3.0:
         start = time()
         #print('Static normal applied')
         #print('Generating static normal values for connectivity properties...')
-        conn_specs = {
-            'E->I': {'pre': 'E', 'post': 'I', 'synMech': 'exc', 
-                    'prob': cfg.probEI, 
-                    'weight': cfg.weightEI},
-            'I->E': {'pre': 'I', 'post': 'E', 'synMech': 'inh', 
-                    'prob': cfg.probIE, 
-                    'weight': cfg.weightIE},
-            'E->E': {'pre': 'E', 'post': 'E', 'synMech': 'exc', 
-                    'prob': cfg.probEE, 
-                    'weight': cfg.weightEE},
-            'I->I': {'pre': 'I', 'post': 'I', 'synMech': 'inh', 
-                    'prob': cfg.probII, 
-                    'weight': cfg.weightII},
+
+        # Excitatory connections: each E->target connection places both AMPA and NMDA mechanisms
+        exc_conn_specs = {
+            'E->I': {'pre': 'E', 'post': 'I',
+                    'prob': cfg.probEI,
+                    'weight_AMPA': cfg.weightEI_AMPA,
+                    'weight_NMDA': cfg.weightEI_NMDA},
+            'E->E': {'pre': 'E', 'post': 'E',
+                    'prob': cfg.probEE,
+                    'weight_AMPA': cfg.weightEE_AMPA,
+                    'weight_NMDA': cfg.weightEE_NMDA},
         }
-        for key, spec in conn_specs.items():
+        for key, spec in exc_conn_specs.items():
             netParams.connParams[key] = {
-                'preConds': {
-                    #'cellType': spec['pre']
-                    'pop': spec['pre']
-                    },
-                'postConds': {
-                    #'cellType': spec['post']
-                    'pop': spec['post']
-                    },
-                #'probability': spec['prob'],   # NOTE: apparently I've been forgetting to apply problengthconst 
-                                                # and decay to the probability...good thing I'm doing this
-                                                # sensitivity analysis thing...
-                'probability': 'exp(-dist_3D / {})*{}'.format(cfg.probLengthConst, spec['prob']),  
-                'weight': spec['weight'],
-                'delay': 'dist_3D / {}'.format(cfg.propVelocity),
-                'synMech': spec['synMech']
+                'preConds': {'pop': spec['pre']},
+                'postConds': {'pop': spec['post']},
+                'probability': 'exp(-dist_3D / {})*{}'.format(cfg.probLengthConst, spec['prob']),
+                'weight': [spec['weight_AMPA'] * cfg.scale_AMPA,
+                           spec['weight_NMDA'] * cfg.scale_NMDA],
+                'delay': 'max(0.1, dist_3D / {})'.format(cfg.propVelocity),
+                'synMech': ['AMPA', 'NMDA']
             }
 
-        netParams.synMechParams['exc'] = {
-            'mod': 'Exp2Syn', 
-            'tau1': cfg.tau1_exc,
-            'tau2': cfg.tau2_exc, 
+        # Inhibitory connections: each I->target connection uses GABA mechanism
+        inh_conn_specs = {
+            'I->E': {'pre': 'I', 'post': 'E',
+                    'prob': cfg.probIE,
+                    'weight': cfg.weightIE_GABA},
+            'I->I': {'pre': 'I', 'post': 'I',
+                    'prob': cfg.probII,
+                    'weight': cfg.weightII_GABA},
+        }
+        for key, spec in inh_conn_specs.items():
+            netParams.connParams[key] = {
+                'preConds': {'pop': spec['pre']},
+                'postConds': {'pop': spec['post']},
+                'probability': 'exp(-dist_3D / {})*{}'.format(cfg.probLengthConst, spec['prob']),
+                'weight': spec['weight'] * cfg.scale_GABA,
+                'delay': 'max(0.1, dist_3D / {})'.format(cfg.propVelocity),
+                'synMech': 'GABA'
+            }
+
+        # Synaptic mechanism definitions
+        netParams.synMechParams['AMPA'] = {
+            'mod': 'Exp2Syn',
+            'tau1': cfg.tau1_AMPA,
+            'tau2': cfg.tau2_AMPA,
             'e': 0
             }
-        netParams.synMechParams['inh'] = {
-            'mod': 'Exp2Syn', 
-            'tau1': cfg.tau1_inh, 
-            'tau2': cfg.tau2_inh, 
+        netParams.synMechParams['NMDA'] = {
+            'mod': 'Exp2Syn',
+            'tau1': cfg.tau1_NMDA,
+            'tau2': cfg.tau2_NMDA,
+            'e': 0
+            }
+        netParams.synMechParams['GABA'] = {
+            'mod': 'Exp2Syn',
+            'tau1': cfg.tau1_GABA,
+            'tau2': cfg.tau2_GABA,
             'e': -75
             }
         

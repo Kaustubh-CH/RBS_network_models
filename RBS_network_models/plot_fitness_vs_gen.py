@@ -423,6 +423,8 @@ def main():
                         help='Rolling average window size (default: 1 = no smoothing)')
     parser.add_argument('--mode', choices=['evol', 'optuna'], default=None,
                         help='Force run mode (auto-detected if not specified)')
+    parser.add_argument('--y-cap', type=float, default=150,
+                        help='Y-axis cap; values above are clipped/marked as overflow (default: 150)')
     
     args = parser.parse_args()
     
@@ -444,17 +446,18 @@ def main():
     output_path = args.output or os.path.join(batch_dir, 'fitness_vs_gen.png')
     
     # Plot
-    plot_fitness(records, mode, output_path, 
+    plot_fitness(records, mode, output_path,
                  show_components=args.components,
                  log_scale=args.log,
-                 rolling_window=args.rolling)
+                 rolling_window=args.rolling,
+                 y_cap=args.y_cap)
 
 
 if __name__ == '__main__':
     main()
 
 ''' cd /pscratch/sd/k/ktub1999 && python3 /pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/RBS_network_models/plot_fitness_vs_gen.py \
-/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_seed_large_limited_tau_2_w0_focus_InhFR/batch_runs/batch_2026-04-02_spiking_only
+/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_seed_large_limited_tau_2_w1_FixedPropVel/batch_runs/batch_2026-07-01_spiking_only
  '''
 
 '''

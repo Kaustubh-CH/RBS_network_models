@@ -168,6 +168,8 @@ def load_from_raw_recordings(
     threshold_mad: float,
     peak_sign: str,
     n_jobs: int,
+    clip_seconds: Optional[float] = None,
+    independent_noise: bool = False,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray], dict]:
     """Run the same preprocessing + threshold-detection chain as
     spikesort_drug_comparison.py, but on the channel intersection (no extremum
@@ -226,21 +228,50 @@ def load_from_raw_recordings(
     post_sliced = _select_channels(post_rec, common_native)
 
     logger.info("[raw] computing per-channel noise on pre (sliced)...")
-    noise = np.asarray(si.get_noise_levels(pre_sliced, return_scaled=False), dtype=np.float32)
+    noise_pre = np.asarray(si.get_noise_levels(pre_sliced, return_scaled=False), dtype=np.float32)
     logger.info(
         "[raw] pre noise: median=%.3f  min=%.3f  max=%.3f",
-        float(np.median(noise)), float(noise.min()), float(noise.max()),
+        float(np.median(noise_pre)), float(noise_pre.min()), float(noise_pre.max()),
     )
+    if independent_noise:
+        logger.info("[raw] computing per-channel noise on post (sliced) — INDEPENDENT_NOISE=True")
+        noise_post = np.asarray(si.get_noise_levels(post_sliced, return_scaled=False), dtype=np.float32)
+        logger.info(
+            "[raw] post noise: median=%.3f  min=%.3f  max=%.3f",
+            float(np.median(noise_post)), float(noise_post.min()), float(noise_post.max()),
+        )
+    else:
+        # Phase 1 default: reuse PRE noise on POST so the µV threshold is identical
+        # across sides — drug effect on rate, not threshold drift.
+        noise_post = noise_pre
 
     fs = float(pre_sliced.get_sampling_frequency())
     pre_dur = float(pre_sliced.get_duration())
     post_dur = float(post_sliced.get_duration())
 
+    # Optional: time-slice both recordings before peak detection. Big speedup
+    # when downstream analysis only uses the first `clip_seconds` of spikes
+    # (e.g. T=20s validation against full 300s recordings = ~15× faster).
+    # Noise levels above were computed on full PRE so this doesn't degrade them.
+    if clip_seconds is not None and clip_seconds > 0:
+        n_pre  = pre_sliced.get_num_frames()
+        n_post = post_sliced.get_num_frames()
+        n_clip = int(clip_seconds * fs)
+        pre_for_detect  = pre_sliced.frame_slice(0,  min(n_clip, n_pre))
+        post_for_detect = post_sliced.frame_slice(0, min(n_clip, n_post))
+        logger.info(
+            "[raw] time-slicing for detection to %.1fs (pre %d→%d frames, post %d→%d)",
+            clip_seconds, n_pre, pre_for_detect.get_num_frames(),
+            n_post, post_for_detect.get_num_frames(),
+        )
+    else:
+        pre_for_detect, post_for_detect = pre_sliced, post_sliced
+
     peaks_pre = detect_threshold_crossings(
-        pre_sliced, noise, threshold_mad, peak_sign, n_jobs, logger, "pre",
+        pre_for_detect, noise_pre, threshold_mad, peak_sign, n_jobs, logger, "pre",
     )
     peaks_post = detect_threshold_crossings(
-        post_sliced, noise, threshold_mad, peak_sign, n_jobs, logger, "post",
+        post_for_detect, noise_post, threshold_mad, peak_sign, n_jobs, logger, "post",
     )
     pre_units = peaks_by_channel(peaks_pre, common, fs)
     post_units = peaks_by_channel(peaks_post, common, fs)
@@ -256,7 +287,9 @@ def load_from_raw_recordings(
         "pre_recording_seconds": pre_dur,
         "post_recording_seconds": post_dur,
         "fs_hz": fs,
-        "noise_median": float(np.median(noise)),
+        "noise_median_pre": float(np.median(noise_pre)),
+        "noise_median_post": float(np.median(noise_post)),
+        "independent_noise": bool(independent_noise),
     }
     return pre_units, post_units, metadata
 

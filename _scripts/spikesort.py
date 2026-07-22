@@ -1,12 +1,20 @@
 import os
+os.environ['HDF5_PLUGIN_PATH'] = '/global/homes/k/ktub1999/hdf5_plugin_path_maxwell'
+
 from MEA_Analysis.NetworkAnalysis.awNetworkAnalysis.run_sorter import run_sorter
 import glob
 
+
+
+
+
 # prepare paths =============================================================================
-input_dir = '/global/homes/a/adammwea/pscratch/z_raw_data/' #dir where all raw data are stored in pscratch (data should be copied here from long term storage before running for optimal I/O)
+input_dir = '/pscratch/sd/k/ktub1999/networkSimulations/' #dir where all raw data are stored in pscratch (data should be copied here from long term storage before running for optimal I/O)
+
 #raw_data_path = 'CDKL5-E6D_T2_C1_05212024/CDKL5-E6D_T2_C1_05212024/240611/M08029/Network/000091/data.raw.h5' # path to raw data within inputs_dir
-raw_data_path ='irc_maxone_desktop/media/harddrive8tb/CDKL5-R59X_MaxOnePlus_T1_05202025_PS/CDKL5-R59X_MaxOnePlus_T1_05202025_PS/250620/P002779/Network/000030/data.raw.h5'
-output_dir = '/global/homes/a/adammwea/pscratch/z_analyzed_data/' #dir where all analyzed data are stored in pscratch (use data transfer bash script to copy to long term storage as needed)
+# raw_data_path ='irc_maxone_desktop/media/harddrive8tb/CDKL5-R59X_MaxOnePlus_T1_05202025_PS/CDKL5-R59X_MaxOnePlus_T1_05202025_PS/250620/P002779/Network/000030/data.raw.h5'
+raw_data_path = 'KCNT1.h5'
+output_dir = '/pscratch/sd/k/ktub1999/networkSimulations/z_analyzed_data/' #dir where all analyzed data are stored in pscratch (use data transfer bash script to copy to long term storage as needed)
 input_path = os.path.join(input_dir, raw_data_path) # absolute path to raw data
 sorted_output_dir = os.path.join(output_dir, os.path.dirname(raw_data_path), 'sorted') # path to sorted data within outputs_dir
 waveform_output_dir = os.path.join(output_dir, os.path.dirname(raw_data_path), 'waveforms') # path to waveform data within outputs_dir
@@ -31,7 +39,7 @@ run_sorter(
     use_docker=False,   # NOTE: Default is True. Comment out this line to use docker.
                         #       If running on NERSC, you'll need to run without docker and with shifter.
                         #       see below for shifter command to run on NERSC
-    #try_load = False,   # NOTE: Default is True. Comment out this line to try loading the sorted data.
+    try_load = False,   # NOTE: Default is True. Comment out this line to try loading the sorted data.
     )
 
 # bash commands =============================================================================
@@ -40,10 +48,23 @@ run_sorter(
 #  to run spikesorting as needed in interactive node with gpu:
 '''
 salloc -A m2043_g -q interactive -C gpu -t 04:00:00 --nodes=4 --gpus=4 --image=adammwea/axonkilo_docker:v7
-salloc -A m2043_g -q interactive -C gpu -t 04:00:00 --nodes=1 --gpus=1 --image=adammwea/axonkilo_docker:v7
+salloc -A m2043_g -q interactive -C gpu -t 04:00:00 --nodes=1 --gpus=1 --image=nersc/pytorch:ngc-21.08-v2
 '''
 
 # after salloc, run the following command: # NOTE: replace path to script as needed.
+
+
+
+# on shifter interactive node:
+#--image=ktub1999/network_simulation_sorting:v1
+# 
+# shifter
+# bash
+# source /home/miniconda3/etc/profile.d/conda.sh
+# source /opt/conda/etc/profile.d/conda.sh - jan's image
+# conda activate preshifter
+
+
 '''
 # run shifter and install editable packages as needed
 shifter --image=adammwea/axonkilo_docker:v7 /bin/bash

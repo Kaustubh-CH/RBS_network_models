@@ -36,6 +36,6 @@ export MPI_LIB_NRN_PATH=$(find $MPICH_DIR -name libmpi.so | head -1)
 # from neuron import h
 # print("MPI load OK, h =", h)
 # EOF
-name="CDKL5_seed_large_02_w1_focus_InhFR_v2"
+name="CDKL5_bicc_test_20"
 #
 python /pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_FxHET/run_batch.py $name evol_params_large

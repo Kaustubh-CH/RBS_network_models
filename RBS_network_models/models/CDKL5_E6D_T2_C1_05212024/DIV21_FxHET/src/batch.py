@@ -12,6 +12,7 @@ from RBS_network_models.utils.utils_old.batch_helper import rangify_params, get_
 from RBS_network_models.utils.utils_old.cfg_helper import import_module_from_path
 # from RBS_network_models.fitnessFunc_claude import fitnessFunc_claude as fitnessFunc
 from RBS_network_models.fitnessFunc_v2 import fitnessFunc_v2 as fitnessFunc
+# from RBS_network_models.fitnessFunc_v2_drug import fitnessFunc_v2_drug as fitnessFunc
 # from RBS_network_models.fitnessFunc import fitnessFunc_v3 as fitnessFunc
 
 from RBS_network_models.utils.utils_old.helper import indent_decrease, indent_increase
@@ -120,6 +121,23 @@ def batchEvol_v2(**kwargs):
             os.environ['T_TARGET_S'] = str(T_target_s)
             kwargs['T_target_s'] = T_target_s
 
+        # Drug conditions to evaluate per candidate (set by run_batch.py --drugs).
+        # Validate each name against DRUG_REGISTRY here so typos die before the
+        # batch is submitted, then publish the comma-joined list via DRUGS so
+        # init.py picks it up on every spawned MPI rank.
+        drugs = kwargs.get('drugs', []) or []
+        if drugs:
+            from RBS_network_models.models.CDKL5_E6D_T2_C1_05212024.DIV21_FxHET.src.drug_perturbations \
+                import validate_drug
+            for d in drugs:
+                validate_drug(d)
+            os.environ['DRUGS'] = ",".join(drugs)
+            print(f"Set DRUGS={os.environ['DRUGS']}")
+        elif 'DRUGS' in os.environ:
+            # Baseline-only run: clear any leftover env so init.py doesn't pick
+            # up a stale drug list from a previous batch in the same shell.
+            del os.environ['DRUGS']
+
         return kwargs
     
     def init_fitnessFunc_args(**kwargs):
@@ -135,6 +153,18 @@ def batchEvol_v2(**kwargs):
             'mega_params': mega_params,
             'plot_sim': kwargs.get('plot_sim', False),
             'reference_data_path': kwargs.get('reference_data_path', None),
+            # Multi-drug optimization: list of drug names whose post/pre rate
+            # ratios should be scored against /drug_effects/<drug>/ in the
+            # reference h5. Empty list = baseline-only fit (legacy behaviour).
+            'drugs': kwargs.get('drugs', []) or [],
+            # fitnessFunc_v2_drug inputs: fixed baseline ("previous") sim + drug group key
+            'baseline_data_path': kwargs.get('baseline_data_path', None),
+            'drug_name': kwargs.get('drug_name', None),
+            # Config-drift penalty: keep every optimized param at baseline except
+            # the GABA weights the drug is allowed to change.
+            'param_names': list(kwargs['parameter_space'].keys()) if kwargs.get('parameter_space') else None,
+            'config_penalty_weight': kwargs.get('config_penalty_weight', None),
+            'exclude_params': kwargs.get('exclude_params', None),
             'excit_units': kwargs.get('excit_units', []),
             'inhib_units': kwargs.get('inhib_units', []),
             'batching': True,
@@ -171,7 +201,7 @@ def batchEvol_v2(**kwargs):
         #pop_size = 256        
         #pop_size = 128
         # pop_size = 2
-        pop_size = kwargs.get('pop_size', 10)
+        pop_size = kwargs.get('pop_size', 20)
 
         # num elites options
         #num_elites = 50
@@ -416,7 +446,7 @@ def batchEvol_v2(**kwargs):
             'fitnessFuncArgs': fitnessFuncArgs,
             'maxFitness': 10000,
             'maxiters': kwargs.get('maxiters', 1000),          # total number of trials
-            'maxtime': 3600 * 24,      # 8 hour budget
+            'maxtime': kwargs.get('maxtime', 3600 * 24),       # optuna study wall-clock timeout (seconds); default 24h
             'maxiter_wait': kwargs.get('maxiter_wait', 100),
             'time_sleep': kwargs.get('time_sleep', 15),
             'direction': 'minimize',

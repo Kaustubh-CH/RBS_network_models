@@ -24,6 +24,7 @@ import os
 import sys
 import json
 import time
+import pickle
 import logging
 import traceback
 from pathlib import Path
@@ -185,6 +186,26 @@ def load_experimental_h5(h5_path: str) -> Dict[str, Any]:
 # SIMULATED DATA LOADING / EXTRACTION
 # =============================================================================
 
+def _load_drug_simData_from_pkl(pkl_path: str) -> Dict:
+    """Read drug_simData (if any) directly from the pkl on disk.
+
+    NetPyNE's ``sim.load(pkl_path)`` unpacks only the keys it knows about
+    (simData, simConfig, netParams, etc.) into globals — our extra
+    ``drug_simData`` key, merged in by init.py for multi-drug runs, is
+    silently dropped. This helper re-opens the pkl with pickle to pull it out.
+    Returns ``{}`` when the key is absent (legacy single-condition pkl) or
+    the pkl cannot be read.
+    """
+    try:
+        with open(pkl_path, 'rb') as _f:
+            _pkl = pickle.load(_f)
+        if isinstance(_pkl, dict):
+            return _pkl.get('drug_simData', {}) or {}
+    except Exception as _e:
+        logger.warning(f"Could not read drug_simData from {pkl_path}: {_e}")
+    return {}
+
+
 def get_sim_data_from_call_stack(kwargs: Dict) -> Dict:
     """Load simulated data from NetPyNE batch call stack."""
     if sim is None:
@@ -212,6 +233,7 @@ def get_sim_data_from_call_stack(kwargs: Dict) -> Dict:
         'candidate_path': candidate_path,
         'fitness_save_path': f'{candidate_path}_fitness.json',
         'metrics_save_path': f'{candidate_path}_metrics.npy',
+        'drug_simData': _load_drug_simData_from_pkl(pkl_path),
     })
     return kwargs
 
@@ -241,6 +263,7 @@ def get_sim_data_from_pkl(kwargs: Dict) -> Dict:
         'candidate_path': candidate_path,
         'fitness_save_path': f'{candidate_path}_fitness.json',
         'metrics_save_path': f'{candidate_path}_metrics.npy',
+        'drug_simData': _load_drug_simData_from_pkl(sim_data_path),
     })
     return kwargs
 
@@ -857,14 +880,14 @@ def compute_hierarchical_burst_scores(
     bp = burst_params or {}
     fit_schema = _resolve_fit_schema(fit_schema)
 
-    # Main burst detection (threshold=45)
+    # Main burst detection (static threshold = 40 on ws_sharp)
     sim_bursts = _run_burst_detector(
         sim_spike_data, min_burstlet_participation=0.05,
-        base_threshold_multiplier=40, **bp,
+        base_threshold_static=40, **bp,
     )
     exp_bursts = _run_burst_detector(
         exp_spike_data, min_burstlet_participation=0.05,
-        base_threshold_multiplier=40, **bp,
+        base_threshold_static=40, **bp,
     )
 
     results = {}
@@ -882,11 +905,11 @@ def compute_hierarchical_burst_scores(
     # Pre-burstlet score (lower threshold = 15×)
     # ------------------------------------------------------------------
     sim_pre_bursts = _run_burst_detector(
-        sim_spike_data, base_threshold_multiplier=15,
+        sim_spike_data, base_threshold_static=15,
         min_burstlet_participation=0.05,
     )
     exp_pre_bursts = _run_burst_detector(
-        exp_spike_data, base_threshold_multiplier=15,
+        exp_spike_data, base_threshold_static=15,
         min_burstlet_participation=0.05,
     )
 
@@ -1085,8 +1108,8 @@ def compute_hierarchical_burst_scores_simple_v2(
     bp = burst_params or {}
     fit_schema = _resolve_fit_schema(fit_schema)
 
-    sim_bursts = _run_burst_detector(sim_spike_data, min_burstlet_participation=0.05, base_threshold_multiplier=45, **bp)
-    exp_bursts = _run_burst_detector(exp_spike_data, base_threshold_multiplier=45, **bp)
+    sim_bursts = _run_burst_detector(sim_spike_data, min_burstlet_participation=0.05, base_threshold_static=50, **bp)
+    exp_bursts = _run_burst_detector(exp_spike_data, base_threshold_static=45, **bp)
 
     # --- Early exit: penalise simulations with a superburst in the first 2.5 s ---
     _max_score = DEFAULT_CONFIG.get('max_fitness', 30000.0)
@@ -1107,16 +1130,18 @@ def compute_hierarchical_burst_scores_simple_v2(
                 'count_score': _max_score,
                 'timing_score': _max_score,
                 'peak_width_score': _max_score,
+                'amp_score': _max_score,
                 'total_score': _max_score,
-                'weights': {'count': 0.4, 'timing': 0.2, 'peak_width': 0.4},
+                'weights': {'count': 0.4, 'timing': 0.2, 'peak_width': 0.4, 'amp': 0.0},
             }
             for level in _levels
         }
         _r['pre_burstlets'] = {
             'n_sim': 0, 'n_exp': 0,
             'count_score': _max_score, 'timing_score': _max_score, 'peak_width_score': _max_score,
+            'amp_score': _max_score,
             'total_score': _max_score,
-            'weights': {'count': 0.4, 'timing': 0.2, 'peak_width': 0.4},
+            'weights': {'count': 0.4, 'timing': 0.2, 'peak_width': 0.4, 'amp': 0.0},
             'sim_threshold': None, 'exp_threshold': None,
         }
         _r['mse'] = _max_score
@@ -1131,7 +1156,20 @@ def compute_hierarchical_burst_scores_simple_v2(
         _r['exp_plot_data'] = exp_bursts.get('plot_data', {})
         return _r
 
-    default_w = {'count': 0.4, 'timing': 0.2, 'peak_width': 0.4}
+    default_w = {'count': 0.4, 'timing': 0.2, 'peak_width': 0.4, 'amp': 0.0}
+
+    # Burst amplitude in units of peak population rate PER UNIT. The detector's
+    # PFR is a raw sum of per-unit spike counts (it is never divided by unit
+    # count), so a raw burst_peak scales with network size -- comparing sim to exp
+    # without this division would mostly measure the unit-count mismatch between
+    # the model and the recording rather than anything about the bursts.
+    _n_sim_units = max(len(sim_spike_data), 1)
+    _n_exp_units = max(len(exp_spike_data), 1)
+
+    def _mean_amp(events, n_units: int) -> float:
+        if not events:
+            return 0.0
+        return float(np.mean([float(ev.get('burst_peak', 0.0)) for ev in events])) / n_units
 
     def _weights_from_schema_dict(schema_dict: Dict[str, Any], level_name: str) -> Dict[str, float]:
         # schema_v2-style structure: fit_schema[level]['metrics'][metric]['weight']
@@ -1146,6 +1184,9 @@ def compute_hierarchical_burst_scores_simple_v2(
             'timing': float(metrics.get('timing_error', {}).get('weight', 0.0)),
             # Requested mapping: duration_error weight drives spike-width term
             'peak_width': float(metrics.get('duration_error', {}).get('weight', 0.0)),
+            # Schemas without burst_amp_error resolve to 0.0 here, so the amplitude
+            # term is inert and older schemas score identically to before.
+            'amp': float(metrics.get('burst_amp_error', {}).get('weight', 0.0)),
         }
 
     def _resolve_weights(level_name: str) -> Dict[str, float]:
@@ -1155,13 +1196,15 @@ def compute_hierarchical_burst_scores_simple_v2(
             schema_w = default_w.copy()
 
         w = schema_w
-        s = float(w.get('count', 0.0) + w.get('timing', 0.0) + w.get('peak_width', 0.0))
+        s = float(w.get('count', 0.0) + w.get('timing', 0.0)
+                  + w.get('peak_width', 0.0) + w.get('amp', 0.0))
         if s <= 0:
             return schema_w
         return {
             'count': float(w.get('count', 0.0)) / s,
             'timing': float(w.get('timing', 0.0)) / s,
             'peak_width': float(w.get('peak_width', 0.0)) / s,
+            'amp': float(w.get('amp', 0.0)) / s,
         }
 
     levels = ['burstlets', 'network_bursts', 'superbursts']
@@ -1194,12 +1237,19 @@ def compute_hierarchical_burst_scores_simple_v2(
         exp_mean_peak_width = float(np.mean(exp_peak_widths)) if exp_peak_widths else 0.0
         peak_width_se = abs(sim_mean_peak_width - exp_mean_peak_width) / max(exp_mean_peak_width, 1e-6)
 
+        # --- Amplitude score: relative error of mean per-unit burst peak ---
+        sim_mean_amp = _mean_amp(sim_events, _n_sim_units)
+        exp_mean_amp = _mean_amp(exp_events, _n_exp_units)
+        amp_se = abs(sim_mean_amp - exp_mean_amp) / max(exp_mean_amp, 1e-6)
+
         # --- Combined score for this level ---
         w = _resolve_weights(level)
         w_count = w['count']
         w_timing = w['timing']
         w_peak_width = w['peak_width']
-        level_score = (w_count * count_se + w_timing * timing_vp + w_peak_width * peak_width_se) * 100
+        w_amp = w['amp']
+        level_score = (w_count * count_se + w_timing * timing_vp
+                       + w_peak_width * peak_width_se + w_amp * amp_se) * 100
 
         results[level] = {
             'n_sim': n_sim,
@@ -1207,10 +1257,14 @@ def compute_hierarchical_burst_scores_simple_v2(
             'count_score': count_se,
             'timing_score': timing_vp,
             'peak_width_score': peak_width_se,
+            'amp_score': amp_se,
             'sim_mean_peak_width': sim_mean_peak_width,
             'exp_mean_peak_width': exp_mean_peak_width,
+            'sim_mean_amp': sim_mean_amp,
+            'exp_mean_amp': exp_mean_amp,
             'total_score': level_score,
-            'weights': {'count': w_count, 'timing': w_timing, 'peak_width': w_peak_width},
+            'weights': {'count': w_count, 'timing': w_timing,
+                        'peak_width': w_peak_width, 'amp': w_amp},
         }
         level_scores.append(level_score)
 
@@ -1222,8 +1276,8 @@ def compute_hierarchical_burst_scores_simple_v2(
     # Pre-burstlet score (lower threshold = 1.2×)
     # ------------------------------------------------------------------
     # pre_bp = {**bp, 'base_threshold_multiplier': 1.2}
-    sim_pre_bursts = _run_burst_detector(sim_spike_data,base_threshold_multiplier= 30,min_burstlet_participation=0.05 )
-    exp_pre_bursts = _run_burst_detector(exp_spike_data ,base_threshold_multiplier= 30,min_burstlet_participation=0.05)
+    sim_pre_bursts = _run_burst_detector(sim_spike_data, base_threshold_static=30, min_burstlet_participation=0.05)
+    exp_pre_bursts = _run_burst_detector(exp_spike_data, base_threshold_static=30, min_burstlet_participation=0.05)
 
     sim_pre_events = sim_pre_bursts.get('burstlets', {}).get('events', [])
     exp_pre_events = exp_pre_bursts.get('burstlets', {}).get('events', [])
@@ -1246,8 +1300,13 @@ def compute_hierarchical_burst_scores_simple_v2(
     exp_pre_mean_peak_width = float(np.mean(exp_pre_peak_widths)) if exp_pre_peak_widths else 0.0
     pre_peak_width_se = abs(sim_pre_mean_peak_width - exp_pre_mean_peak_width) / max(exp_pre_mean_peak_width, 1e-6)
 
+    sim_pre_mean_amp = _mean_amp(sim_pre_events, _n_sim_units)
+    exp_pre_mean_amp = _mean_amp(exp_pre_events, _n_exp_units)
+    pre_amp_se = abs(sim_pre_mean_amp - exp_pre_mean_amp) / max(exp_pre_mean_amp, 1e-6)
+
     pre_w = _resolve_weights('pre_burstlets')
-    pre_score = (pre_w['count'] * pre_count_se + pre_w['timing'] * pre_timing_vp + pre_w['peak_width'] * pre_peak_width_se) * 100
+    pre_score = (pre_w['count'] * pre_count_se + pre_w['timing'] * pre_timing_vp
+                 + pre_w['peak_width'] * pre_peak_width_se + pre_w['amp'] * pre_amp_se) * 100
 
     sim_pre_threshold = sim_pre_bursts.get('plot_data', {}).get('threshold', None)
     exp_pre_threshold = exp_pre_bursts.get('plot_data', {}).get('threshold', None)
@@ -1258,10 +1317,14 @@ def compute_hierarchical_burst_scores_simple_v2(
         'count_score': pre_count_se,
         'timing_score': pre_timing_vp,
         'peak_width_score': pre_peak_width_se,
+        'amp_score': pre_amp_se,
         'sim_mean_peak_width': sim_pre_mean_peak_width,
         'exp_mean_peak_width': exp_pre_mean_peak_width,
+        'sim_mean_amp': sim_pre_mean_amp,
+        'exp_mean_amp': exp_pre_mean_amp,
         'total_score': pre_score,
-        'weights': {'count': pre_w['count'], 'timing': pre_w['timing'], 'peak_width': pre_w['peak_width']},
+        'weights': {'count': pre_w['count'], 'timing': pre_w['timing'],
+                    'peak_width': pre_w['peak_width'], 'amp': pre_w['amp']},
         'sim_threshold': sim_pre_threshold,
         'exp_threshold': exp_pre_threshold,
     }
@@ -1426,8 +1489,8 @@ def _plot_raster(ax, spike_data, title="", cell_types=None):
             color = 'gray'
         ax.plot(
             times, np.full_like(times, y),
-            linestyle='None', marker='|', markersize=3,
-            markeredgewidth=0.5, color=color, alpha=0.8, rasterized=True,
+            linestyle='None', marker='|', markersize=5,
+            markeredgewidth=1.0, color=color, alpha=0.8, rasterized=True,
         )
     ax.set_ylabel("Unit Index")
     ax.set_ylim(-1, len(units))
@@ -1507,6 +1570,640 @@ def _overlay_bursts(ax, burst_events):
         events = burst_events.get(level, [])
         for ev in events:
             ax.axvspan(ev['start'], ev['end'], color=color, alpha=alpha)
+
+
+def _sim_cell_types_from_popdata(pop_data, baseline_features=None) -> Dict[int, str]:
+    """Map GID -> 'excitatory'/'inhibitory' from NetPyNE popData GID ranges.
+    Mirrors the block inside plot_fitness_comparison so the drug rasters share
+    the same E/I colouring as the baseline fitness plot."""
+    sim_cell_types: Dict[int, str] = {}
+    if pop_data:
+        for pop_name, pop_info in pop_data.items():
+            ct = 'inhibitory' if pop_name == 'I' else 'excitatory'
+            for gid in pop_info.get('cellGids', []):
+                sim_cell_types[int(gid)] = ct
+    return sim_cell_types
+
+
+def plot_drug_response(
+    drugs: List[str],
+    drug_simData: Dict[str, Dict],
+    baseline_features: Dict,
+    drug_results: Dict[str, Any],
+    recording_duration: float,
+    save_path_prefix: str,
+    burst_params: Optional[Dict] = None,
+    baseline_burst_results: Optional[Dict] = None,
+    pop_data: Optional[Dict] = None,
+    network_cool_down: float = 0.0,
+) -> None:
+    """One figure per drug comparing the perturbed network to baseline.
+
+    Layout (rows, sharing the time axis for the first four):
+        1. Baseline raster        (+ burst overlays)
+        2. Baseline network activity
+        3. Drug raster            (+ burst overlays)
+        4. Drug network activity
+        5. Bar chart: simulated vs experimental post/pre ratios per feature,
+           annotated with the per-feature |sim-exp| deviation.
+
+    Saves ``<prefix>_drug_<drug>.png`` (full) plus a 30s zoom of the rasters.
+    Drugs that failed or are missing from ``drug_simData`` get a single
+    annotated panel instead of the full comparison.
+    """
+    import matplotlib.pyplot as plt
+
+    bp = burst_params or {}
+    sim_cell_types = _sim_cell_types_from_popdata(pop_data, baseline_features)
+    per_drug = (drug_results or {}).get('per_drug', {})
+
+    # Baseline burst plot data / events: reuse what the baseline scoring already
+    # computed when available; otherwise run the detector once here.
+    if baseline_burst_results and baseline_burst_results.get('sim_plot_data'):
+        base_pd = baseline_burst_results.get('sim_plot_data', {})
+        base_events = baseline_burst_results.get('sim_burst_events', {})
+    else:
+        _bnb = _run_burst_detector(baseline_features.get('spike_data', {}),
+                                   min_burstlet_participation=0.05, **bp)
+        base_pd = _bnb.get('plot_data', {})
+        base_events = {lvl: _bnb.get(lvl, {}).get('events', [])
+                       for lvl in ['burstlets', 'network_bursts', 'superbursts']}
+
+    for drug in drugs:
+        entry = (drug_simData or {}).get(drug)
+        drug_info = per_drug.get(drug, {})
+        drug_fit = drug_info.get('fit')
+        save_path = f"{save_path_prefix}_drug_{drug}.png"
+
+        # --- Failed / missing drug: single annotated panel ---
+        if not entry or entry.get('_failure') or 'sim_ratios' not in drug_info:
+            reason = drug_info.get('reason') or (
+                entry.get('_failure_reason') if isinstance(entry, dict) else 'missing')
+            fig, ax = plt.subplots(1, 1, figsize=(10, 3))
+            ax.axis('off')
+            ax.text(0.5, 0.5,
+                    f"Drug '{drug}' not scored\nreason: {reason}\n"
+                    f"fit = {drug_fit}",
+                    ha='center', va='center', fontsize=12)
+            fig.savefig(save_path, dpi=150)
+            plt.close(fig)
+            logger.info(f"Saved drug placeholder plot: {save_path}")
+            continue
+
+        # --- Drug-side features + burst detection (first network_cool_down s
+        # excluded + shifted, mirroring the baseline path so the rasters /
+        # network-activity panels show only the settled analysis window) ---
+        drug_features = _build_features_from_drug_pkl(entry, recording_duration,
+                                                      min_time=network_cool_down)
+        drug_nb = _run_burst_detector(drug_features.get('spike_data', {}),
+                                      min_burstlet_participation=0.05, **bp)
+        drug_pd = drug_nb.get('plot_data', {})
+        drug_events = {lvl: drug_nb.get(lvl, {}).get('events', [])
+                       for lvl in ['burstlets', 'network_bursts', 'superbursts']}
+
+        sim_ratios = drug_info.get('sim_ratios', {}) or {}
+        exp_ratios = drug_info.get('exp_ratios', {}) or {}
+
+        fig = plt.figure(figsize=(16, 17))
+        gs = fig.add_gridspec(5, 1, height_ratios=[3, 2, 3, 2, 2.2])
+        ax_b_raster = fig.add_subplot(gs[0])
+        ax_b_net = fig.add_subplot(gs[1], sharex=ax_b_raster)
+        ax_d_raster = fig.add_subplot(gs[2], sharex=ax_b_raster)
+        ax_d_net = fig.add_subplot(gs[3], sharex=ax_b_raster)
+        ax_bar = fig.add_subplot(gs[4])
+
+        fit_str = f"{drug_fit:.1f}" if isinstance(drug_fit, (int, float)) else str(drug_fit)
+
+        # Baseline
+        _plot_raster(ax_b_raster, baseline_features.get('spike_data', {}),
+                     title=f"[{drug}] fit={fit_str} | Baseline Raster",
+                     cell_types=sim_cell_types)
+        _overlay_bursts(ax_b_raster, base_events)
+        if base_pd:
+            _plot_network_signal(ax_b_net, base_pd, title="Baseline Network Activity")
+            _overlay_bursts(ax_b_net, base_events)
+        else:
+            ax_b_net.text(0.5, 0.5, "No baseline burst data",
+                          transform=ax_b_net.transAxes, ha='center')
+
+        # Drug
+        _plot_raster(ax_d_raster, drug_features.get('spike_data', {}),
+                     title=f"[{drug}] Drug Raster", cell_types=sim_cell_types)
+        _overlay_bursts(ax_d_raster, drug_events)
+        if drug_pd:
+            _plot_network_signal(ax_d_net, drug_pd, title=f"[{drug}] Drug Network Activity")
+            _overlay_bursts(ax_d_net, drug_events)
+        else:
+            ax_d_net.text(0.5, 0.5, "No drug burst data",
+                          transform=ax_d_net.transAxes, ha='center')
+        ax_d_net.set_xlabel("Time (s)")
+
+        # --- Ratio comparison bar chart (sim vs exp, post/pre) ---
+        feats = [f for f in _DRUG_RATIO_FEATURE_MAP if f in sim_ratios or f in exp_ratios]
+        x = np.arange(len(feats))
+        w = 0.38
+        sim_vals = [float(sim_ratios.get(f, np.nan)) for f in feats]
+        exp_vals = [float(exp_ratios.get(f, np.nan)) for f in feats]
+        ax_bar.bar(x - w / 2, sim_vals, w, label='Simulated', color='tab:blue', alpha=0.85)
+        ax_bar.bar(x + w / 2, exp_vals, w, label='Experimental', color='tab:orange', alpha=0.85)
+        ax_bar.axhline(1.0, color='gray', ls='--', lw=1, alpha=0.7)  # ratio = no change
+        for xi, sv, ev in zip(x, sim_vals, exp_vals):
+            if np.isfinite(sv):
+                ax_bar.text(xi - w / 2, sv, f"{sv:.2f}", ha='center',
+                            va='bottom', fontsize=7)
+            if np.isfinite(ev):
+                ax_bar.text(xi + w / 2, ev, f"{ev:.2f}", ha='center',
+                            va='bottom', fontsize=7)
+            if np.isfinite(sv) and np.isfinite(ev):
+                ax_bar.text(xi, -0.06, f"Δ={abs(sv - ev):.2f}",
+                            ha='center', va='top', fontsize=7, color='dimgray',
+                            transform=ax_bar.get_xaxis_transform())
+        ax_bar.set_xticks(x)
+        ax_bar.set_xticklabels([f.replace('_ratio', '') for f in feats],
+                               rotation=15, fontsize=8)
+        ax_bar.set_ylabel("post / pre ratio")
+        ax_bar.set_title(f"[{drug}] Simulated vs Experimental drug-response ratios "
+                         f"(fit={fit_str})", fontsize=10)
+        ax_bar.legend(fontsize=8, loc='upper right', framealpha=0.7)
+        ax_bar.spines['top'].set_visible(False)
+        ax_bar.spines['right'].set_visible(False)
+
+        plt.tight_layout()
+        try:
+            fig.savefig(save_path, dpi=200)
+            logger.info(f"Saved drug response plot: {save_path}")
+            for ax in (ax_b_raster, ax_b_net, ax_d_raster, ax_d_net):
+                ax.set_xlim(0, 30)
+            fig.savefig(save_path.replace('.png', '_30s.png'), dpi=200)
+        finally:
+            plt.close(fig)
+
+
+# =============================================================================
+# DRUG-RESPONSE SCORING (multi-drug optimization)
+# =============================================================================
+
+def _build_features_from_drug_pkl(drug_entry: Dict, recording_duration: float,
+                                  min_time: Optional[float] = None) -> Dict:
+    """Build the {spike_data, n_units, total_spikes, ...} dict the burst
+    detector expects from a ``drug_simData[drug]`` entry (spkt/spkid pair).
+
+    Reuses ``extract_simulated_features`` so the time-shift / per-unit dict
+    construction stays identical between baseline and drug paths. ``min_time``
+    (the network_cool_down, seconds) drops spikes before that time and shifts
+    the rest to t=0 — mirroring the baseline path so the drug post/pre ratios
+    are computed over the same settled window (the first ``min_time`` s are a
+    cool-down and must be excluded).
+    """
+    return extract_simulated_features(
+        {'spkt': drug_entry.get('spkt', []), 'spkid': drug_entry.get('spkid', [])},
+        recording_duration=recording_duration,
+        min_time=min_time if (min_time and min_time > 0) else None,
+    )
+
+
+# Burst-detector params for the drug post/pre rate ratios. MUST match the params
+# the EXPERIMENTAL ratios were extracted with so simulated and experimental ratios
+# are computed on identical footing — see extract_drug_effects.MAIN_BURST_KW /
+# PRE_BURST_KW. The MAIN detector (static=40) produces burstlets / network_bursts /
+# superbursts; a SECOND detector at the lower static=15 threshold produces the
+# pre-burstlets (its 'burstlets' level). Without an explicit base_threshold_static
+# the detector defaults to multiplier mode (baseline_val x3), recomputed per
+# spike-train, so each condition would get a different threshold and the rate
+# ratios would reflect threshold adaptation rather than real change.
+_DRUG_BURST_KW = {'base_threshold_static': 40, 'min_burstlet_participation': 0.05}
+_DRUG_PRE_BURST_KW = {'base_threshold_static': 15, 'min_burstlet_participation': 0.05}
+
+
+def _level_stat(nb_result: Dict, level: str, key: str) -> float:
+    """Mean of a per-level burst statistic, 0.0 when the level has no events.
+
+    ``level_metrics()`` in the detector returns ``{}`` for a level with zero
+    events, so every hop has to be ``.get``-chained.
+    """
+    return float(
+        nb_result.get(level, {}).get('metrics', {}).get(key, {}).get('mean', 0.0)
+    )
+
+
+# Quantile above which a unit is called inhibitory. Matches
+# extract_drug_effects.INHIB_QUANTILE so the simulated E/I split is defined the
+# same way as the experimental one.
+_INHIB_QUANTILE = 0.80
+
+
+def _classify_top20(spike_data: Dict, recording_duration: float,
+                    quantile: float = _INHIB_QUANTILE) -> Dict:
+    """Label the top (1-quantile) fraction of units by firing rate as inhibitory.
+
+    Mirrors ``extract_drug_effects.classify_channels_top20``. The simulation does
+    know each cell's true type, but the experimental target does not -- its E/I
+    split is this firing-rate proxy -- so using the proxy on both sides is what
+    makes the exc/inh ratios comparable at all.
+    """
+    if not spike_data or recording_duration <= 0:
+        return {}
+    rates = {uid: len(st) / recording_duration for uid, st in spike_data.items()}
+    threshold = float(np.quantile(list(rates.values()), quantile))
+    return {
+        uid: ('inhibitory' if r >= threshold else 'excitatory')
+        for uid, r in rates.items()
+    }
+
+
+def _class_mean_rate(spike_data: Dict, classification: Dict, cell_type: str,
+                     recording_duration: float) -> float:
+    """Mean firing rate (Hz) across units of one class."""
+    if recording_duration <= 0 or not classification:
+        return 0.0
+    members = [uid for uid, c in classification.items()
+               if c == cell_type and uid in spike_data]
+    if not members:
+        return 0.0
+    return float(np.mean([len(spike_data[uid]) / recording_duration for uid in members]))
+
+
+# Every key produced by _ratios_from_features. The degenerate branch and the
+# normal branch must return exactly this key set -- _DRUG_RATIO_FEATURE_MAP looks
+# them up unconditionally, so a key missing from either branch is a KeyError on
+# whichever candidate happens to fall down that path.
+_DRUG_RATIO_FEATURE_KEYS = (
+    'pop_FR', 'exc_firing_rate', 'inh_firing_rate',
+    'network_burst_rate', 'network_burst_duration', 'network_burst_amp',
+    'burstlet_rate', 'burstlet_duration', 'burstlet_amp',
+    'superburst_rate', 'superburst_duration',
+    'pre_burstlet_rate', 'pre_burstlet_duration',
+)
+
+
+def _ratios_from_features(features: Dict, recording_duration: float, burst_params: Dict,
+                          classification: Optional[Dict] = None) -> Dict[str, float]:
+    """Return the population-level features used for post/pre ratios.
+
+    Runs the burst detector with the same fixed params on every condition AND
+    the same the experimental ratios were extracted with, so pre/post and sim/exp
+    are all commensurable: ``_DRUG_BURST_KW`` (static=40) for burstlets /
+    network_bursts / superbursts, and ``_DRUG_PRE_BURST_KW`` (static=15) for
+    pre-burstlets. Caller-supplied ``burst_params`` override these defaults.
+
+    ``classification`` must be derived from the BASELINE condition and passed in
+    unchanged for the drug condition, so a unit's E/I label is fixed by its
+    pre-drug behaviour -- the same convention extract_drug_effects uses. Deriving
+    it separately per condition would let disinhibition reshuffle the labels and
+    make the exc/inh ratios meaningless.
+
+    Burst amplitude is divided by unit count because the detector's PFR is a raw
+    sum over units, not a per-unit mean. It cancels in a post/pre ratio either
+    way, but keeping it normalised here means the value logged in the fitness
+    json is directly comparable to the baseline scorer's.
+    """
+    if features['n_units'] == 0 or features['total_spikes'] == 0:
+        return {k: 0.0 for k in _DRUG_RATIO_FEATURE_KEYS}
+
+    n_units = max(int(features['n_units']), 1)
+    spike_data = features['spike_data']
+    pop_FR = features['total_spikes'] / max(n_units * recording_duration, 1e-9)
+
+    cls = classification or {}
+    bp = burst_params or {}
+    nb = _run_burst_detector(spike_data, **{**_DRUG_BURST_KW, **bp})
+    pre_nb = _run_burst_detector(spike_data, **{**_DRUG_PRE_BURST_KW, **bp})
+
+    def _rate(d, level): return float(d.get(level, {}).get('metrics', {}).get('rate', 0.0))
+    def _amp(d, level): return _level_stat(d, level, 'burst_peak') / n_units
+
+    return {
+        'pop_FR':                 float(pop_FR),
+        'exc_firing_rate':        _class_mean_rate(spike_data, cls, 'excitatory', recording_duration),
+        'inh_firing_rate':        _class_mean_rate(spike_data, cls, 'inhibitory', recording_duration),
+
+        'network_burst_rate':     _rate(nb, 'network_bursts'),
+        'network_burst_duration': _level_stat(nb, 'network_bursts', 'duration'),
+        'network_burst_amp':      _amp(nb, 'network_bursts'),
+
+        'burstlet_rate':          _rate(nb, 'burstlets'),
+        'burstlet_duration':      _level_stat(nb, 'burstlets', 'duration'),
+        'burstlet_amp':           _amp(nb, 'burstlets'),
+
+        'superburst_rate':        _rate(nb, 'superbursts'),
+        'superburst_duration':    _level_stat(nb, 'superbursts', 'duration'),
+
+        'pre_burstlet_rate':      _rate(pre_nb, 'burstlets'),
+        'pre_burstlet_duration':  _level_stat(pre_nb, 'burstlets', 'duration'),
+    }
+
+
+# Below this, a baseline value is treated as "this network had none of these
+# events" rather than as a divisor.
+_RATIO_DENOM_FLOOR = 1e-6
+
+
+def _safe_sim_ratio(num: float, denom: float) -> Optional[float]:
+    """post/pre ratio, or None when the baseline value is too small to divide by.
+
+    The old code did ``num / max(denom, 1e-9)``, which has two failure modes:
+
+      * numerator > 0 -> a ratio around 1e9, indistinguishable once the loss
+        saturates from a genuine enormous drug effect. Real ratios up to 4.7e9
+        appear in the smoke_v4 batch.
+      * numerator == 0 -> a ratio of exactly 0.0, which then compares as a
+        PERFECT MATCH against any experimental ratio that is also 0.0. That is a
+        0/0 scored as success: every candidate with no baseline superbursts
+        collected the superburst weight for free, regardless of what the drug did.
+
+    Returning None lets the caller drop the feature and renormalise the remaining
+    weights, so an undefined ratio counts as "no information" rather than either
+    "perfectly wrong" or "perfectly right".
+
+    NOTE this changes drug scores on the experimental path too: a trial that
+    previously scored 24899.958 now scores 27666.62, purely because the free
+    superburst credit (weight 0.10) is no longer granted. Baseline-only runs are
+    unaffected -- compute_drug_response_score returns early when drugs is empty.
+    """
+    if denom is None or not np.isfinite(denom) or abs(denom) < _RATIO_DENOM_FLOOR:
+        return None
+    ratio = num / denom
+    return float(ratio) if np.isfinite(ratio) else None
+
+
+_DRUG_ERR_EPS = 1e-3
+
+# Scale for a *scored* drug loss. The per-feature loss is already normalized to
+# [0, 1] (0 == perfect match), so a fully-scored drug term must land on the same
+# 0..100 scale as every baseline component (unit_metrics, burst scorers all
+# multiply their normalized error by 100 -- e.g. fitnessFunc_v2.py:395, :832,
+# :1252). Using ``max_score`` (30000) here instead was a bug: a drug sim that ran
+# fine but matched maximally badly scored 30000, indistinguishable in magnitude
+# from a dead-network dealbreaker, so drug_response silently became ~97% of
+# fitness despite a nominal weight of 0.40. GENUINE failures (missing pkl,
+# crashed sim, no schema, dead baseline) still return ``max_score`` = 30000, the
+# dealbreaker sentinel, matching the baseline dead-network convention at :1115.
+_DRUG_LOSS_SCALE = 100.0
+
+
+def _drug_feature_error(sim_r: float, exp_r: float, max_dev: float, loss: str) -> float:
+    """Normalized per-feature drug loss in [0, 1]. 0 == exact match.
+
+    Two forms, selected by ``fit_schema['drug_response']['loss']``:
+
+    ``'clipped'`` (default, legacy)
+        ``min(|sim - exp| / max_dev, 1.0)``. Kept as the default so existing
+        experimental-target runs score identically.
+
+    ``'log_soft'``
+        Distance measured in log space -- ratios are multiplicative, so sim=0.5
+        against exp=2.0 is as wrong as sim=2.0 against exp=8.0 -- then softly
+        saturated with ``d/(1+d)``, which is strictly increasing on [0, inf).
+
+    The clipped form has a dead zone that is the measured cause of the flat drug
+    gradient: with max_dev = |exp - 1|, EVERY simulated ratio from 0 up to 1
+    yields exactly 1.0, so "the drug did nothing" and "the drug abolished
+    bursting entirely" are indistinguishable. In smoke_v4 that pinned the
+    bicuculline term at exactly 24899.958 for 81 of 99 trials, because 91 of 99
+    produced zero detected bursts under GABA block. A term with no gradient
+    cannot steer a search, which is the whole point of the drug run.
+    """
+    if loss != 'log_soft':
+        return min(abs(float(sim_r) - float(exp_r)) / max(float(max_dev), 1e-9), 1.0)
+
+    num = max(float(sim_r), 0.0) + _DRUG_ERR_EPS
+    den = max(float(exp_r), 0.0) + _DRUG_ERR_EPS
+    scale = max(float(np.log1p(max(float(max_dev), 0.0))), 1e-9)
+    d = abs(float(np.log(num / den))) / scale
+    if not np.isfinite(d):
+        return 1.0
+    return float(d / (1.0 + d))
+
+
+# Schema-feature name → (sim/exp feature key, exp h5 dataset name).
+# fit_schema names end in '_ratio'; we strip that to look up the underlying feature.
+# Every value on the left must exist in _DRUG_RATIO_FEATURE_KEYS, and every name
+# on the right must exist as a dataset in /drug_effects/<drug>/ of the target h5 --
+# a schema metric whose h5 dataset is missing is silently skipped at scoring time.
+_DRUG_RATIO_FEATURE_MAP = {
+    'pop_FR_ratio':                 ('pop_FR',                 'pop_FR_ratio'),
+    'exc_firing_rate_ratio':        ('exc_firing_rate',        'exc_firing_rate_ratio'),
+    'inh_firing_rate_ratio':        ('inh_firing_rate',        'inh_firing_rate_ratio'),
+
+    'network_burst_rate_ratio':     ('network_burst_rate',     'network_burst_rate_ratio'),
+    'network_burst_duration_ratio': ('network_burst_duration', 'network_burst_duration_ratio'),
+    'network_burst_amp_ratio':      ('network_burst_amp',      'network_burst_amp_ratio'),
+
+    'burstlet_rate_ratio':          ('burstlet_rate',          'burstlet_rate_ratio'),
+    'burstlet_duration_ratio':      ('burstlet_duration',      'burstlet_duration_ratio'),
+    'burstlet_amp_ratio':           ('burstlet_amp',           'burstlet_amp_ratio'),
+
+    'superburst_rate_ratio':        ('superburst_rate',        'superburst_rate_ratio'),
+    'superburst_duration_ratio':    ('superburst_duration',    'superburst_duration_ratio'),
+
+    'pre_burstlet_rate_ratio':      ('pre_burstlet_rate',      'pre_burstlet_rate_ratio'),
+    'pre_burstlet_duration_ratio':  ('pre_burstlet_duration',  'pre_burstlet_duration_ratio'),
+}
+
+
+def compute_drug_response_score(
+    drugs: List[str],
+    drug_simData: Dict[str, Dict],
+    baseline_features: Dict,
+    reference_data_path: str,
+    fit_schema: Optional[Dict[str, Any]],
+    recording_duration: float,
+    burst_params: Optional[Dict] = None,
+    max_score: float = 30000.0,
+    network_cool_down: float = 0.0,
+) -> Dict[str, Any]:
+    """Score simulated post/pre rate ratios vs experimental drug ratios.
+
+    For each drug in ``drugs``:
+      1. Build features from its spkt/spkid in ``drug_simData[drug]``.
+      2. Compute simulated post/pre ratios for the features named in the
+         ``drug_response`` schema component.
+      3. Read experimental ratios from
+         ``<reference_h5>/drug_effects/<drug>/<feature>_ratio``.
+      4. Per-feature loss = ``min(|sim - exp| / max_dev, 1.0) * max_score``,
+         weighted by the schema metric weight. Loss is averaged across
+         drug-metric pairs that match; each drug's loss is averaged across
+         features and a missing-or-failed drug gets ``max_score``.
+
+    Returns
+    -------
+    dict
+        ``{'fit': float, 'per_drug': {drug: {sim_ratios, exp_ratios, fit, reason?}}}``
+    """
+    if not drugs:
+        return {'fit': 0.0, 'per_drug': {}}
+
+    schema_metrics = {}
+    drug_loss_form = 'clipped'
+    if isinstance(fit_schema, dict):
+        _drug_block = fit_schema.get('drug_response', {}) or {}
+        schema_metrics = _drug_block.get('metrics', {}) or {}
+        # Opt-in per schema so experimental-target runs keep the legacy loss.
+        drug_loss_form = str(_drug_block.get('loss', 'clipped'))
+    if not schema_metrics:
+        # No schema entry for drug_response → cannot score; treat as max_score
+        # so the optimizer can't game the missing weight.
+        return {'fit': float(max_score), 'per_drug': {d: {'fit': max_score,
+                                                          'reason': 'no drug_response schema'}
+                                                     for d in drugs}}
+
+    # E/I labels are fixed by the BASELINE condition and reused unchanged for every
+    # drug, matching how extract_drug_effects fixes them from the PRE recording.
+    baseline_classification = _classify_top20(
+        baseline_features.get('spike_data', {}), recording_duration
+    )
+
+    # Baseline rate features — same shape on both sides.
+    baseline_rates = _ratios_from_features(baseline_features, recording_duration,
+                                           burst_params or {},
+                                           classification=baseline_classification)
+
+    per_drug = {}
+    drug_losses: List[float] = []
+    for drug in drugs:
+        entry = (drug_simData or {}).get(drug)
+        if not entry or entry.get('_failure'):
+            per_drug[drug] = {'fit': float(max_score),
+                              'reason': entry.get('_failure_reason') if entry else 'missing'}
+            drug_losses.append(max_score)
+            continue
+
+        drug_features = _build_features_from_drug_pkl(entry, recording_duration,
+                                                      min_time=network_cool_down)
+        drug_rates = _ratios_from_features(drug_features, recording_duration,
+                                           burst_params or {},
+                                           classification=baseline_classification)
+
+        # Simulated post/pre ratios. Features whose baseline value is ~0 are
+        # dropped rather than divided by, and recorded so the omission is visible
+        # in trial_*_fitness.json instead of silently reweighting the drug term.
+        sim_ratios: Dict[str, float] = {}
+        skipped_features: Dict[str, str] = {}
+        for feat, (rate_key, _) in _DRUG_RATIO_FEATURE_MAP.items():
+            if feat not in schema_metrics:
+                continue
+            ratio = _safe_sim_ratio(drug_rates.get(rate_key, 0.0),
+                                    baseline_rates.get(rate_key, 0.0))
+            if ratio is None:
+                skipped_features[feat] = (
+                    f'baseline {rate_key}={baseline_rates.get(rate_key, 0.0):.3g} '
+                    f'below {_RATIO_DENOM_FLOOR:g}'
+                )
+            else:
+                sim_ratios[feat] = ratio
+
+        # Experimental ratios from the reference h5
+        exp_ratios: Dict[str, float] = {}
+        try:
+            with h5py.File(reference_data_path, 'r') as _f:
+                grp = _f.get(f'drug_effects/{drug}')
+                if grp is None:
+                    per_drug[drug] = {'fit': float(max_score),
+                                      'reason': f'no /drug_effects/{drug} in {reference_data_path}'}
+                    drug_losses.append(max_score)
+                    continue
+                for feat, (_, h5_name) in _DRUG_RATIO_FEATURE_MAP.items():
+                    if feat in schema_metrics and h5_name in grp:
+                        exp_ratios[feat] = float(grp[h5_name][()])
+        except Exception as _e:
+            per_drug[drug] = {'fit': float(max_score),
+                              'reason': f'h5 read error: {type(_e).__name__}: {_e}'}
+            drug_losses.append(max_score)
+            continue
+
+        # A schema metric with no matching dataset is skipped silently below,
+        # which shrinks the effective drug weight instead of failing. Say so.
+        _missing = [f for f in schema_metrics
+                    if f in _DRUG_RATIO_FEATURE_MAP and f not in exp_ratios]
+        if _missing:
+            logger.warning(
+                f"[{drug}] schema metrics with no dataset in "
+                f"{reference_data_path}:/drug_effects/{drug} (they will not be "
+                f"scored): {_missing}"
+            )
+
+        # Weighted loss over every feature the target actually defines. A feature
+        # whose ratio is undefined (degenerate baseline) is charged FULL loss, not
+        # dropped.
+        #
+        # Dropping it and renormalising over the survivors is a loophole, and it
+        # wins: a candidate whose baseline produces no bursts makes all five burst
+        # features unscorable and is then graded only on the three firing-rate
+        # features -- 35% of the objective. Measured in gen_7/gen_12 of the first
+        # theory run, that shortcut took the two BEST drug scores (9415, 12991),
+        # beating gen_9 (15580) which actually reproduced post-drug bursting and
+        # was graded on all eight. Charging full loss keeps the denominator fixed
+        # so "I made this unmeasurable" can never beat "I got it wrong".
+        feat_w_total = 0.0
+        feat_loss_acc = 0.0
+        unscorable_weight = 0.0
+        for feat in exp_ratios:
+            mcfg = schema_metrics.get(feat, {}) or {}
+            w = float(mcfg.get('weight', 0.0))
+            if w <= 0:
+                continue
+            mx = float(mcfg.get('max_dev', 1.0))
+            if feat in sim_ratios:
+                err = _drug_feature_error(sim_ratios[feat], exp_ratios[feat], mx, drug_loss_form)
+            else:
+                err = 1.0
+                unscorable_weight += w
+            feat_loss_acc += w * err
+            feat_w_total += w
+
+        if feat_w_total <= 0:
+            # Nothing scorable → degenerate; max score. Two very different causes,
+            # and reporting the wrong one sends the reader hunting a config bug
+            # when the real answer is that the candidate network is dead.
+            if skipped_features and not sim_ratios:
+                _reason = (f'no scorable features: baseline produced no activity '
+                           f'(total_spikes={baseline_features.get("total_spikes", 0)}) '
+                           f'so every ratio is undefined')
+            elif not exp_ratios:
+                _reason = (f'no scorable features: none of the schema metrics exist as '
+                           f'datasets in /drug_effects/{drug}')
+            else:
+                _reason = 'no scorable features: all matched metrics have zero weight'
+            drug_fit = float(max_score)
+            per_drug[drug] = {'fit': drug_fit, 'reason': _reason,
+                              'sim_ratios': sim_ratios, 'exp_ratios': exp_ratios,
+                              'skipped_features': skipped_features}
+        else:
+            # Normalized [0,1] loss -> 0..100, same scale as baseline components.
+            # NOT max_score (30000); that is the dealbreaker sentinel, reserved
+            # for the failure branches above. See _DRUG_LOSS_SCALE.
+            drug_fit = float(_DRUG_LOSS_SCALE * (feat_loss_acc / feat_w_total))
+            per_drug[drug] = {'fit': drug_fit,
+                              'sim_ratios': sim_ratios, 'exp_ratios': exp_ratios,
+                              'skipped_features': skipped_features,
+                              # Fraction of the drug weight charged full loss because
+                              # its ratio was undefined. >0 means the candidate is
+                              # being penalised for an unmeasurable baseline, not for
+                              # a wrong drug response.
+                              'unscorable_weight_fraction': float(unscorable_weight),
+                              'scored_weight_fraction': float(feat_w_total)}
+
+        # Raw per-condition values, not just their ratio. Without these a ratio of
+        # 0.0 is ambiguous: it can mean the drug network saturated into tonic
+        # firing (spikes way up, detector finds no discrete bursts) or that it
+        # went silent (spikes ~0). Those need opposite fixes, and ratios alone
+        # cannot tell them apart -- which is what made smoke_v4 hard to diagnose.
+        per_drug[drug]['loss_form'] = drug_loss_form
+        per_drug[drug]['baseline_condition'] = {
+            'n_units': int(baseline_features.get('n_units', 0)),
+            'total_spikes': int(baseline_features.get('total_spikes', 0)),
+        }
+        per_drug[drug]['drug_condition'] = {
+            'n_units': int(drug_features.get('n_units', 0)),
+            'total_spikes': int(drug_features.get('total_spikes', 0)),
+        }
+        per_drug[drug]['baseline_rates'] = {k: float(v) for k, v in baseline_rates.items()}
+        per_drug[drug]['drug_rates'] = {k: float(v) for k, v in drug_rates.items()}
+        drug_losses.append(drug_fit)
+
+    overall = float(np.mean(drug_losses)) if drug_losses else 0.0
+    overall = min(overall, max_score) if np.isfinite(overall) else max_score
+    return {'fit': overall, 'per_drug': per_drug}
 
 
 # =============================================================================
@@ -1683,13 +2380,36 @@ def fitnessFunc_v2(
         network_burst_score = _clamp(network_burst_score)
         superburst_score    = _clamp(superburst_score)
 
+        # ----------------------------------------------------------------
+        # 4b. Drug-response scoring (only when --drugs was used)
+        # ----------------------------------------------------------------
+        drugs_requested = kwargs.get('drugs', []) or []
+        drug_simData = kwargs.get('drug_simData', {}) or {}
+        if drugs_requested:
+            drug_results = compute_drug_response_score(
+                drugs=drugs_requested,
+                drug_simData=drug_simData,
+                baseline_features=sim_features,
+                reference_data_path=reference_data_path,
+                fit_schema=fit_schema,
+                recording_duration=recording_duration,
+                burst_params=burst_params,
+                max_score=max_score,
+                network_cool_down=network_cool_down,
+            )
+            drug_response_score = _clamp(drug_results['fit'])
+        else:
+            drug_results = {'fit': 0.0, 'per_drug': {}}
+            drug_response_score = 0.0
+
         fitness = (
             weights.get('unit_metrics',    0.0) * unit_score +
             weights.get('synchrony',       0.0) * sync_score +
             weights.get('pre_burstlets',   0.0) * pre_burstlet_score +
             weights.get('burstlets',       0.0) * burstlet_score +
             weights.get('network_bursts',  0.0) * network_burst_score +
-            weights.get('superbursts',     0.0) * superburst_score
+            weights.get('superbursts',     0.0) * superburst_score +
+            weights.get('drug_response',   0.0) * drug_response_score
         )
         fitness = min(fitness, max_score)
 
@@ -1706,6 +2426,8 @@ def fitnessFunc_v2(
                 'burstlets': {'fit': float(burstlet_score), **burst_results['burstlets']},
                 'network_bursts': {'fit': float(network_burst_score), **burst_results['network_bursts']},
                 'superbursts': {'fit': float(superburst_score), **burst_results['superbursts']},
+                'drug_response': {'fit': float(drug_response_score),
+                                  'per_drug': drug_results.get('per_drug', {})},
                 'hierarchical_diagnostics': burst_results['diagnostics'],
                 'fit': float(fitness),
             },
@@ -1774,6 +2496,25 @@ def fitnessFunc_v2(
                 )
             except Exception as e:
                 logger.warning(f"Plotting failed: {e}")
+
+            # Drug-response plots: one figure per drug (baseline vs drug rasters,
+            # network activity, and the simulated-vs-experimental ratio bars).
+            if drugs_requested:
+                try:
+                    plot_drug_response(
+                        drugs=drugs_requested,
+                        drug_simData=drug_simData,
+                        baseline_features=sim_features,
+                        drug_results=drug_results,
+                        recording_duration=recording_duration,
+                        save_path_prefix=candidate_path,
+                        burst_params=burst_params,
+                        baseline_burst_results=burst_results,
+                        pop_data=kwargs.get('popData'),
+                        network_cool_down=network_cool_down,
+                    )
+                except Exception as e:
+                    logger.warning(f"Drug-response plotting failed: {e}")
 
         elapsed = time.time() - time_start
         logger.info(f"Elapsed: {elapsed:.2f}s")

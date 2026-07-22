@@ -12,15 +12,15 @@ selected_option = 1
 if selected_option == 1:
     # imports ===================================================================================================
     #TARGET_DIR = '/global/homes/a/adammwea/pscratch/z_simulated_data/CDKL5-E6D_T2_C1_05212024/DIV21_FxHET/250702/sensitivity_analysis/run0000'
-    TARGET_DIR = '/global/homes/a/adammwea/pscratch/z_simulated_data/CDKL5-E6D_T2_C1_05212024/DIV21_FxHET/250715/sensitivity_analysis/run0000'
-    CONV_PATH = '/global/homes/a/adammwea/dev/RBS_network_models/RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_FxHET/src/conv_params.py'
+    TARGET_DIR = '/pscratch/sd/k/ktub1999/networkSimulations/z_analyzed_data/sorted/well000'
+    CONV_PATH = '/pscratch/sd/k/ktub1999/networkSimulations/RBS_network_models/RBS_network_models/models/CDKL5_E6D_T2_C1_05212024/DIV21_FxHET/src/conv_params.py'
 
     kwargs={
         # search parameters
         'target_dir': TARGET_DIR,
         'exclude': ['_archive',], # exclude any paths that contain these strings
         #'source': 'simulated',  # 'simulated' or 'experimental'
-        
+        'source': 'experimental',  
         # convolution params
         'conv_path': CONV_PATH,  # path to the conversion parameters file
         
@@ -38,7 +38,7 @@ if selected_option == 1:
         
         # runtime
         #'parallel': True,  # whether to run in parallel
-        'parallel': True,  # while debugging, set to False to run sequentially
+        'parallel': False,  # while debugging, set to False to run sequentially
         #'procs': 16,  # number of processes to use for parallel processing
         'procs': 256, # number of processes to use for parallel processing - 1 full node
         

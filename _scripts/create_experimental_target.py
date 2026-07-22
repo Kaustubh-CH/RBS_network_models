@@ -335,12 +335,13 @@ def save_to_hdf5(features, output_path):
                         print(f"  Warning: Could not save feature '{feature_name}' for unit {unit_id}: {e} (type: {type(feature_value)})")
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='Create experimental features HDF5 from spike times and metrics',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-    parser.add_argument('--spike_times', type=str, required=True, 
+def add_baseline_target_arguments(parser):
+    """Add the CLI arguments needed for baseline target construction.
+
+    Factored out so other tools (e.g. build_experimental_target_with_drugs.py)
+    can reuse the same flag definitions without duplicating them.
+    """
+    parser.add_argument('--spike_times', type=str, required=True,
                         help='Path to spike_times.npy file')
     parser.add_argument('--metrics', type=str, required=True,
                         help='Path to metrics_curated.xlsx file')
@@ -363,9 +364,16 @@ def main():
                         help='Window-length grid in seconds (default: 10 20 30 45 60 90 120 180 240).')
     parser.add_argument('--no_auto_T', action='store_true',
                         help='Disable T_target selection and truncation; keep the full recording.')
+    return parser
 
-    args = parser.parse_args()
-    
+
+def build_baseline_target(args):
+    """Run the full baseline-target construction pipeline.
+
+    Takes an argparse Namespace (with the fields added by
+    ``add_baseline_target_arguments``) and writes the baseline target h5 to
+    ``args.output``. Returns the resolved output path as a string.
+    """
     print("="*60)
     print("Creating Experimental Target Features")
     print("="*60)
@@ -461,6 +469,18 @@ def main():
     print(f"      # Load features")
     print(f"      cell_type = f[units[0]].attrs['cell_type']")
     print(f"      firing_rate = f[units[0]].attrs['firing_rate']")
+
+    return args.output
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Create experimental features HDF5 from spike times and metrics',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    add_baseline_target_arguments(parser)
+    args = parser.parse_args()
+    build_baseline_target(args)
 
 
 if __name__ == '__main__':

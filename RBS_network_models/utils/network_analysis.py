@@ -1,7 +1,8 @@
-import MEA_Analysis.NetworkAnalysis_aw.compute_network_metrics as cnm
+# import MEA_Analysis.NetworkAnalysis_aw.compute_network_metrics as cnm
+import MEA_Analysis.NetworkAnalysis.awNetworkAnalysis.network_analysis as cnm
 import RBS_network_models.utils.netpyne_helpers as nph
 import os
-import MEA_Analysis.NetworkAnalysis_aw.network_metrics_helper as nmh
+# import MEA_Analysis.NetworkAnalysis_aw.network_metrics_helper as nmh
 import numpy as np
 from multiprocessing import Process, Queue, Value, Lock, cpu_count
 from pathlib import Path
@@ -10,6 +11,9 @@ from netpyne import sim
 from rich.console import Console
 from rich.progress import Progress, TimeElapsedColumn, BarColumn, TextColumn, TimeRemainingColumn
 import time
+
+import spikeinterface as si
+import glob 
 
 # === Globals ===
 completed_tasks = Value('i', 0)
@@ -51,15 +55,23 @@ def _get_data_files(target_dir, exclude=None, **kwargs):
     """
     Get all _data.pkl or _data.json files in the target directory recursively.
     """
-    pkl_files = nph.get_sim_pkl_paths(target_dir)
-    json_files = nph.get_sim_json_paths(target_dir)
-    
-    data_files = pkl_files + json_files
-    
+    source = kwargs.get('source', 'simulated')
+        
+    if source == 'experimental':
+            # Look for spikeinterface_recording.json
+            if kwargs.get('recursive', True):
+                pattern = os.path.join(target_dir, '**', 'spikeinterface_recording.json')
+            else:
+                pattern = os.path.join(target_dir, 'spikeinterface_recording.json')
+            data_files = glob.glob(pattern, recursive=True)
+    else:
+            pkl_files = nph.get_sim_pkl_paths(target_dir)
+            json_files = nph.get_sim_json_paths(target_dir)
+            data_files = pkl_files + json_files
+        
     if exclude:
-        data_files = [f for f in data_files if not any(excl in f for excl in exclude)]
+            data_files = [f for f in data_files if not any(excl in f for excl in exclude)]
     return data_files
-
 def _unpack_network_metrics_args(data_file, **kwargs):
     """
     Unpack the arguments for network metrics computation from the data file and kwargs.
@@ -139,92 +151,151 @@ def prep_cnm_kwargs(data_file, **kwargs):
     """
     # init
     print(f"Preparing network metrics arguments for {data_file}...")
+    source = kwargs.get('source', 'simulated')
     
-    # load simulation data components needed for network metrics computation
-    assert os.path.exists(data_file), f"Data file {data_file} does not exist."
-    assert data_file.endswith(('.pkl', '.json')), f"Data file {data_file} must be a .pkl or .json file."
-    allSimData, allPops, allCells = nph.load_sim_data(data_file)
-    print(f"Loaded simulation data from {data_file}.")
-    
-    # define the output directory based on the data file path - save data in the same directory as the _data.pkl file
-    output_dir = os.path.dirname(data_file)    
-    print(f"Output directory set to {output_dir}.")
-    
-    # check if conv_path is provided in kwargs, if not raise an error
-    conv_path = kwargs.get('conv_path', None)
-    if conv_path is None: 
-        raise ValueError("conv_path must be defined prior to unpacking the network analysis parameters.")
-    print(f"Using convolution parameters from {conv_path}.")
-    
-    # import convolution parameters from the specified path
-    burst_params, hyperburst_params = import_conv_params(kwargs.get('conv_path', None))
-    print(f"Imported burst and hyperburst parameters.")
-    
-    # format raw spiking data
-    print(f"Formatting raw spiking data...")
-    t = allSimData.t.copy()
-    spkt = allSimData.spkt.copy()
-    spkid = allSimData.spkid.copy()
-    if len(spkt) == 0:
-        print(f"Warning: No spikes found in {data_file}.")
-        raise ValueError(f"No spikes found in {data_file}. Cannot compute network metrics.")
-    time_vector = np.array(t) / 1000 # convert to seconds
-    spike_times = np.array(spkt) / 1000 # convert to seconds
-    spike_times_by_unit = {int(i): spike_times[spkid == i] for i in np.unique(spkid)}
-    print(f"Formatted raw spiking data with {len(spike_times)} spikes across {len(spike_times_by_unit)} units.")
-    
-    # parse known classes for units, if any
-    unit_pops = {}
-    for pop in allPops:
-        for cell in allCells:
-            if 'tags' in cell and 'pop' in cell['tags']:
-                if cell['tags']['pop'] == pop:
-                    unit_pops[cell['gid']] = pop
+    if source == 'experimental':
+        # Experimental Data Loading Logic
+        assert os.path.exists(data_file), f"Data file {data_file} does not exist."
+        folder_path = os.path.dirname(data_file)
+        print(f"Output directory set to {folder_path}.")
+        
+        # Load Recording
+        try:
+            recording = si.load_extractor(data_file)
+        except Exception as e:
+            raise ValueError(f"Failed to load recording from {data_file}: {e}")
+
+        # Load Sorting (expecting 'sorter_output' folder next to recording json)
+        sorter_output_path = os.path.join(folder_path, 'sorter_output')
+        if os.path.exists(sorter_output_path):
+            try:
+                # Try reading as Kilosort output
+                sorting = si.read_kilosort(sorter_output_path)
+            except:
+                try:
+                    # Try loading as SI object
+                    sorting = si.load_extractor(sorter_output_path)
+                except Exception as e:
+                     raise ValueError(f"Failed to load sorting from {sorter_output_path}: {e}")
+        else:
+            raise ValueError(f"Could not find 'sorter_output' directory in {folder_path}")
+
+        # Create Sorting Analyzer (required for metrics)
+        # We create it in memory; it will compute templates/waveforms on demand if needed by cnm
+        print("Creating SortingAnalyzer...")
+        sorting_analyzer = si.create_sorting_analyzer(sorting=sorting, recording=recording, format="memory")
+
+        # Import convolution parameters
+        conv_path = kwargs.get('conv_path', None)
+        if conv_path is None: 
+            raise ValueError("conv_path must be defined.")
+        burst_params, hyperburst_params = import_conv_params(conv_path)
+        
+        # Construct kwargs for compute_network_metrics
+        nm_kwargs = {
+            'source': 'experimental',
+            'sim_data_path': data_file, # kept for reference
+            'recording_object': recording,
+            'sorting_object': sorting,
+            'sorting_analyzer': sorting_analyzer,
+            'burst_params': burst_params,
+            'hyperburst_params': hyperburst_params,
+            'output_dir': folder_path,
+            'parallel': kwargs.get('parallel', False),
+            'compute_spike_metrics': kwargs.get('compute_spike_metrics', True),
+            'compute_burst_metrics': kwargs.get('compute_burst_metrics', True),
+            'classify_units': kwargs.get('classify_units', False),
+            'compute_dynamic_time_warping': kwargs.get('compute_dynamic_time_warping', False),
+            'compute_summary_metrics': kwargs.get('compute_summary_metrics', True),
+        }
+        return nm_kwargs
+    else:
+        
+        # load simulation data components needed for network metrics computation
+        assert os.path.exists(data_file), f"Data file {data_file} does not exist."
+        assert data_file.endswith(('.pkl', '.json')), f"Data file {data_file} must be a .pkl or .json file."
+        allSimData, allPops, allCells = nph.load_sim_data(data_file)
+        print(f"Loaded simulation data from {data_file}.")
+        
+        # define the output directory based on the data file path - save data in the same directory as the _data.pkl file
+        output_dir = os.path.dirname(data_file)    
+        print(f"Output directory set to {output_dir}.")
+        
+        # check if conv_path is provided in kwargs, if not raise an error
+        conv_path = kwargs.get('conv_path', None)
+        if conv_path is None: 
+            raise ValueError("conv_path must be defined prior to unpacking the network analysis parameters.")
+        print(f"Using convolution parameters from {conv_path}.")
+        
+        # import convolution parameters from the specified path
+        burst_params, hyperburst_params = import_conv_params(kwargs.get('conv_path', None))
+        print(f"Imported burst and hyperburst parameters.")
+        
+        # format raw spiking data
+        print(f"Formatting raw spiking data...")
+        t = allSimData.t.copy()
+        spkt = allSimData.spkt.copy()
+        spkid = allSimData.spkid.copy()
+        if len(spkt) == 0:
+            print(f"Warning: No spikes found in {data_file}.")
+            raise ValueError(f"No spikes found in {data_file}. Cannot compute network metrics.")
+        time_vector = np.array(t) / 1000 # convert to seconds
+        spike_times = np.array(spkt) / 1000 # convert to seconds
+        spike_times_by_unit = {int(i): spike_times[spkid == i] for i in np.unique(spkid)}
+        print(f"Formatted raw spiking data with {len(spike_times)} spikes across {len(spike_times_by_unit)} units.")
+        
+        # parse known classes for units, if any
+        unit_pops = {}
+        for pop in allPops:
+            for cell in allCells:
+                if 'tags' in cell and 'pop' in cell['tags']:
+                    if cell['tags']['pop'] == pop:
+                        unit_pops[cell['gid']] = pop
+                
             
-        
-    # repack the arguments into a dictionary for network metrics computation
-    nm_kwargs = {
-        
-        #kwargs
-        #**kwargs,
-        
-        # info for reference
-        'sim_data_path': data_file,
-        'source': 'netpyne',  # 'simulated'
-        
-        # save path
-        #'save_path'
-        
-        # convolution params
-        'burst_params': burst_params,
-        'hyperburst_params': hyperburst_params,
-        
-        # raw data (required)
-        'spkt': spike_times,
-        'spkt_by_unit': spike_times_by_unit,
-        't': time_vector,
-        
-        # raw data (optional)
-        't_unit': 's',  # time unit is seconds
-        'unit_pops': unit_pops,  # dictionary to store unit pops, e.g., {'unit1': 'E', 'unit2': 'I', ...}
-        
-        # output directory
-        'output_dir': output_dir,
-        
-        # runtime options
-        'parallel': kwargs.get('parallel', False),
-        'try_load': kwargs.get('try_load', True),  # whether to try loading existing results
-        
-        # analysis options
-        'compute_spike_metrics': kwargs.get('compute_spike_metrics', True),
-        'compute_burst_metrics': kwargs.get('compute_burst_metrics', True),
-        'classify_units': kwargs.get('classify_units', False),
-        'compute_dynamic_time_warping': kwargs.get('compute_dynamic_time_warping', False),
-        'compute_summary_metrics': kwargs.get('compute_summary_metrics', True),
-    }
+        # repack the arguments into a dictionary for network metrics computation
+        nm_kwargs = {
+            
+            #kwargs
+            #**kwargs,
+            
+            # info for reference
+            'sim_data_path': data_file,
+            'source': 'netpyne',  # 'simulated'
+            
+            # save path
+            #'save_path'
+            
+            # convolution params
+            'burst_params': burst_params,
+            'hyperburst_params': hyperburst_params,
+            
+            # raw data (required)
+            'spkt': spike_times,
+            'spkt_by_unit': spike_times_by_unit,
+            't': time_vector,
+            
+            # raw data (optional)
+            't_unit': 's',  # time unit is seconds
+            'unit_pops': unit_pops,  # dictionary to store unit pops, e.g., {'unit1': 'E', 'unit2': 'I', ...}
+            
+            # output directory
+            'output_dir': output_dir,
+            
+            # runtime options
+            'parallel': kwargs.get('parallel', False),
+            'try_load': kwargs.get('try_load', True),  # whether to try loading existing results
+            
+            # analysis options
+            'compute_spike_metrics': kwargs.get('compute_spike_metrics', True),
+            'compute_burst_metrics': kwargs.get('compute_burst_metrics', True),
+            'classify_units': kwargs.get('classify_units', False),
+            'compute_dynamic_time_warping': kwargs.get('compute_dynamic_time_warping', False),
+            'compute_summary_metrics': kwargs.get('compute_summary_metrics', True),
+        }
 
 
-    return nm_kwargs
+        return nm_kwargs
 
 def _process_sequential(data_files, **kwargs):
     """
@@ -348,7 +419,7 @@ def run_network_analysis(target_dir, **kwargs):
     
     # collect all data files in the target directory
     data_files=_get_data_files(target_dir, **kwargs)
-        
+    console.print(f"[bold blue]Found {len(data_files)} simulation data files in {target_dir}.")
     #
     parallel = kwargs.get('parallel', False)
     if parallel:

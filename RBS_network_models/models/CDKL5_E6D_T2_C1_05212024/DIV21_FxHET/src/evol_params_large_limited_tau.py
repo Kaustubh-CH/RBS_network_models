@@ -14,8 +14,8 @@ version = '2_nostd'
 params = specs.ODict()
 
 # Propagation Parameters
-params['propVelocity'] = [0.1, 10]
-
+# params['propVelocity'] = [0.1, 10]
+params['propVelocity'] = [200, 600]
 # Morphology Parameters (Excitatory and Inhibitory Cells)
 params.update({
 
@@ -39,7 +39,8 @@ params.update({
 })
 
 # Connection Probability Length Constant
-params['probLengthConst'] = [1, 7000]
+# params['probLengthConst'] = [1, 7000]
+params['probLengthConst'] = [100, 2000]
 
 # Connectivity Parameters
 params.update({

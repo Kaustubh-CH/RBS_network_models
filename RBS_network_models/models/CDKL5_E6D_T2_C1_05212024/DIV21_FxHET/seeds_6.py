@@ -13,7 +13,16 @@ seeds =[
 # '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_seed_large_limited_tau_2_w1_focus_InhFR/batch_runs/batch_2026-04-02_spiking_only/gen_17/trial_17_test_1%_cfg.json',
 # '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_seed_large_limited_tau_2_w1_focus_InhFR/batch_runs/batch_2026-04-02_spiking_only/gen_17/trial_17_test_0_1%_cfg.json'
 # '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_seed_large_limited_tau_2_w1_focus_InhFR/batch_runs/batch_2026-04-02_spiking_only/gen_39/trial_39_1%_cfg.json',
-'/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_seed_large_limited_tau_2_w1_focus_InhFR/batch_runs/batch_2026-04-02_spiking_only/gen_39/trial_39_ap5nbx_cfg.json',
-'/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_seed_large_limited_tau_2_w0_focus_InhFR/batch_runs/batch_2026-04-02_spiking_only/gen_69/trial_69_ap5nbqx_cfg.json'
+# '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_seed_large_limited_tau_2_w1_focus_InhFR/batch_runs/batch_2026-04-02_spiking_only/gen_39/trial_39_ap5nbx_cfg.json',
+# '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_seed_v4_02_w1_v1_multi_score/batch_runs_schema_v2/batch_2026-04-02_spiking_only/gen_135/trial_135_cfg.json'
+# '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_seed_large_limited_tau_2_w1_focus_InhFR/batch_runs/batch_2026-04-02_spiking_only/gen_39/trial_39_1%_cfg.json'
+# '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_seed_large_limited_tau_2_w1_focus_InhFR/batch_runs/batch_2026-04-02_spiking_only/gen_39/trial_39_ap5nbx_cfg.json'
+# '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_bicc_test_20/batch_runs/batch_2026-04-02_spiking_only/gen_28/trial_28_unaombanbx_cfg.json',
+# '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_bicc_test_20/batch_runs/batch_2026-04-02_spiking_only/gen_28/trial_28_unaombanbx1x_cfg.json',
+# '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_bicc_test_20/batch_runs/batch_2026-04-02_spiking_only/gen_28/trial_28_cfg.json',
+# '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_bicc_test_20/batch_runs/batch_2026-04-02_spiking_only/gen_28/trial_28_unbicc10_cfg.json',
+# '/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_bicc_test_20/batch_runs/batch_2026-04-02_spiking_only/gen_28/trial_28_unbicc_cfg.json'
 
+
+'/pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/CDKL5_seed_large_limited_tau_2_w1_focus_InhFR/batch_runs/batch_2026-04-02_spiking_only/gen_49/trial_49_more profVelo_cfg.json'
 ]

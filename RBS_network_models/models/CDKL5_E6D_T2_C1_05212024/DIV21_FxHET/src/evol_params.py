@@ -87,18 +87,18 @@ if version == 2.0:
         'probII': [0, 1],  # Inhibitory to Inhibitory connection probability ranges from 0 to 1.
         'probEI': [0, 1],  # Excitatory to Inhibitory connection probability ranges from 0 to 1.
 
-        # 'weightEI': [0, 10],  # [Source: PMC - Determination of effective synaptic conductances](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6420044/)
+        # Excitatory weights split by receptor type: AMPA (fast) and NMDA (slow)
+        # AMPA-mediated weights (blocked by NBQX)
+        'weightEI_AMPA': [0, 1000],  # AMPA weight for E->I connections. [Source: PMC - Determination of effective synaptic conductances](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6420044/)
+        'weightEE_AMPA': [0, 1000],  # AMPA weight for E->E connections.
 
-        # 'weightIE': [0, 10],  # [Source: PMC - Determination of effective synaptic conductances](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6420044/)
+        # NMDA-mediated weights (blocked by AP5)
+        'weightEI_NMDA': [0, 1000],  # NMDA weight for E->I connections.
+        'weightEE_NMDA': [0, 1000],  # NMDA weight for E->E connections.
 
-        # 'weightEE': [0, 10],  # [Source: PMC - Determination of effective synaptic conductances](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6420044/)
-
-        # 'weightII': [0, 10],  # [Source: PMC - Determination of effective synaptic conductances](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6420044/)
-        
-        'weightEI': [0, 1000],  # Weight for Excitatory to Inhibitory connections can range from 0 to 1000 pA, depending on synaptic strength and receptor types. [Source: PMC - Determination of effective synaptic conductances](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6420044/)
-        'weightIE': [0, 1000],  # Weight for Inhibitory to Excitatory connections can range from 0 to 1000 pA, depending on synaptic strength and receptor types. [Source: PMC - Determination of effective synaptic conductances](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6420044/)
-        'weightEE': [0, 1000],  # Weight for Excitatory to Excitatory connections can range from 0 to 1000 pA, depending on synaptic strength and receptor types. [Source: PMC - Determination of effective synaptic conductances](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6420044/)
-        'weightII': [0, 1000],  # Weight for Inhibitory to Inhibitory connections can range from 0 to 1000 pA, depending on synaptic strength and receptor types. [Source: PMC - Determination of effective synaptic conductances](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6420044/)
+        # GABA-mediated weights (blocked by Bicuculline / Gabazine)
+        'weightIE_GABA': [0, 1000],  # GABA weight for I->E connections.
+        'weightII_GABA': [0, 1000],  # GABA weight for I->I connections.
     })
 
     # Sodium (gnabar) and Potassium (gkbar) Conductances
@@ -128,23 +128,19 @@ if version == 2.0:
         'gkbar_I_std': [0, 2],  # Widening the range significantly to account for variability and unknowns in standard deviation of potassium conductance.
     })
 
-    # Synaptic Time Constants
+    # Synaptic Time Constants — split by receptor type
     params.update({
-        #'tau1_exc': [0.1, 2],  # Rise time of excitatory synaptic conductance typically ranges from 0.1 to 2 ms, depending on receptor subtype. [Source: Estimating the Time Course of the Excitatory Synaptic Conductance](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6793890/)
-        # 2025-05-08 22:39:44 - same here. I dont think we actually know enough about the rise time of excitatory synaptic conductance to set such a tight range.
-        'tau1_exc': [0.1, 100],  # Rise time of excitatory synaptic conductance can range from 0.1 to 10 ms, depending on receptor types and synaptic dynamics. [Source: Estimating the Time Course of the Excitatory Synaptic Conductance](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6793890/)
+        # AMPA time constants (fast excitatory)
+        'tau1_AMPA': [0.1, 5],    # AMPA rise time is fast, typically < 1 ms. Wide range kept for fitting flexibility.
+        'tau2_AMPA': [0.1, 50],   # AMPA decay time is fast, typically 1-10 ms.
 
-        #'tau2_exc': [1, 50],  # Decay time of excitatory synaptic conductance varies between 1 and 50 ms, influenced by receptor kinetics. [Source: Neuronal Dynamics online book](https://neuronaldynamics.epfl.ch/online/Ch3.S1.html)
-        # 2025-05-08 22:37:58 - I dont think we actually know enough about the decay time of excitatory synaptic conductance to set such a tight range.
-        'tau2_exc': [0.1, 500],  # Decay time of excitatory synaptic conductance can range from 1 to 100 ms, depending on receptor types and synaptic dynamics. [Source: Estimating the Time Course of the Excitatory Synaptic Conductance](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6793890/)
+        # NMDA time constants (slow excitatory)
+        'tau1_NMDA': [0.1, 100],  # NMDA rise time is slower than AMPA. [Source: Estimating the Time Course of the Excitatory Synaptic Conductance](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6793890/)
+        'tau2_NMDA': [1, 500],    # NMDA decay time is very slow, typically 50-150 ms but can be longer.
 
-        #'tau1_inh': [0.3, 10],  # Rise time of inhibitory synaptic conductance ranges from 0.3 to 10 ms, reflecting GABA_A receptor dynamics. [Source: Neurotransmitter Time Constants (PSCs)](https://compneuro.uwaterloo.ca/research/constants-constraints/neurotransmitter-time-constants-pscs.html)
-        # 2025-05-08 22:40:38 - same here. I dont think we actually know enough about the rise time of inhibitory synaptic conductance to set such a tight range.
-        'tau1_inh': [0.1, 100],  # Rise time of inhibitory synaptic conductance can range from 0.3 to 10 ms, depending on GABA_A and GABA_B receptor contributions. [Source: Neurotransmitter Time Constants (PSCs)](https://compneuro.uwaterloo.ca/research/constants-constraints/neurotransmitter-time-constants-pscs.html)
-        
-        #'tau2_inh': [5, 100],  # Decay time of inhibitory synaptic conductance can range from 5 to 100 ms, depending on GABA_A and GABA_B receptor contributions. [Source: Neurotransmitter Time Constants (PSCs)](https://compneuro.uwaterloo.ca/research/constants-constraints/neurotransmitter-time-constants-pscs.html)
-        # 2025-05-08 22:41:29 - same here. I dont think we actually know enough about the decay time of inhibitory synaptic conductance to set such a tight range.
-        'tau2_inh': [0.1, 1000],  # Decay time of inhibitory synaptic conductance can range from 5 to 100 ms, depending on GABA_A and GABA_B receptor contributions. [Source: Neurotransmitter Time Constants (PSCs)](https://compneuro.uwaterloo.ca/research/constants-constraints/neurotransmitter-time-constants-pscs.html)
+        # GABA time constants (inhibitory, GABA_A)
+        'tau1_GABA': [0.1, 100],  # GABA rise time. [Source: Neurotransmitter Time Constants (PSCs)](https://compneuro.uwaterloo.ca/research/constants-constraints/neurotransmitter-time-constants-pscs.html)
+        'tau2_GABA': [0.1, 1000], # GABA decay time, wide range to account for GABA_A and GABA_B contributions.
     })
 
 

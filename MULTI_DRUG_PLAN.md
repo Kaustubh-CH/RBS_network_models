@@ -294,3 +294,14 @@ Plumb `drugs=_known.drugs` into `kwargs`. When `--drugs` is non-empty, switch th
 - E/I-resolved drug response — current ratios are population-level only because post-drug spike-sorting isn't trustworthy.
 - Drug-onset *dynamics* (wash-in transients) — we model only steady-state pre/post.
 - Drug effects on synaptic kinetics (`tau1_GABA`, `tau2_GABA`) — only conductance scaling for v1.
+- **In-place NetCon rescaling instead of `sim.create()` per drug pass.** v1 (Phase 3
+  serial loop) does a fresh `sim.create()` for each drug condition because the
+  pharmacological scalers (`cfg.scale_AMPA/NMDA/GABA/K`) are consumed at network-
+  construction time (`netParams.py:245-246, 265`). The rebuild dominates the per-
+  drug wall-clock cost. Future optimization: walk `sim.net.allSyns` after the
+  baseline run, multiply each NetCon's weight by `new_scale / old_scale`
+  matched to its synaptic mechanism, then call `sim.simulate()` + `sim.gatherData()`
+  only — skipping `sim.create()`. Restore weights in the `finally` block (mirror
+  pattern of `drug_perturbations.restore_cfg`). Expected speedup: ~2-3× for the
+  drug branch on long simulations. Adds complexity (must map cfg attr → syn mech
+  → NetCon list) so deferred to a follow-up PR once v1 is validated end-to-end.

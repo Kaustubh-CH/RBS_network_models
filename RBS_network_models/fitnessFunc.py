@@ -467,8 +467,100 @@ def fitnessFunc_v3(simulated_data, reference_data_path, **kwargs): #def fitnessF
                 
             return score  
         
-        def handle_list_comparison(simulated_data, experimental_data, key, fitness_dict, plot_fit_curve=False):
+        def handle_spike_times_comparison(simulated_data, experimental_data, key, fitness_dict, plot_fit_curve=False, fit_curve_dir=None, **ckwargs):
+            if path.endswith('spiking_times_by_unit'):
+                def compare_spiking_times_by_unit(simulated_data, experimental_data, key, fitness_dict):
+                    # Import necessary libraries for VP distance
+                    import quantities as pq
+                    from neo.core import SpikeTrain
+                    from elephant.spike_train_dissimilarity import victor_purpura_distance
+                    
+                    # Get spike times - both are now single 1D numpy arrays
+                    sim_spikes_array = simulated_data[key]  # 1D numpy array of spike times
+                    exp_spikes_array = experimental_data[key]  # 1D numpy array of spike times
+                    
+                    # Check if arrays are empty
+                    if len(sim_spikes_array) == 0 and len(exp_spikes_array) == 0:
+                        # No spikes in either dataset - perfect match
+                        return 0.0
+                    
+                    if len(sim_spikes_array) == 0 or len(exp_spikes_array) == 0:
+                        # One dataset has no spikes - maximum penalty
+                        return 1000.0
+                    
+                    # Determine time range - find max spike time across both arrays
+                    t_stop = max(sim_spikes_array.max(), exp_spikes_array.max())
+                    
+                    # Convert to Neo SpikeTrain objects
+                    sim_train = SpikeTrain(sim_spikes_array * pq.ms, t_stop=t_stop * pq.ms)
+                    exp_train = SpikeTrain(exp_spikes_array * pq.ms, t_stop=t_stop * pq.ms)
+                    
+                    # Calculate VP distance
+                    q_value = 0.1 / pq.ms  # Cost parameter - adjust as needed
+                    distance = victor_purpura_distance([sim_train, exp_train], q_value)[0, 1]
+                    
+                    return distance
+                
+                vp_distance = compare_spiking_times_by_unit(simulated_data, experimental_data, key, fitness_dict)
+                
+                # Extract parameters from ckwargs (same as handle_float_or_int_comparison)
+                max_val = ckwargs.get('max_val', None)
+                min_val = ckwargs.get('min_val', 0)  # VP distance minimum is 0
+                weight = ckwargs.get('weight', 0.5)
+                normalize = ckwargs.get('normalize', False)
+                
+                # score - VP distance is already a distance metric, so lower is better
+                target = 0  # best possible distance is 0
+                maxFitness = 1000  # maximum fitness score
+                
+                # Create fit curve path if needed
+                abs_path_underscored = abs_path.replace('.', '_')
+                fit_curve_path = os.path.join(fit_curve_dir, f'{abs_path_underscored}_fit_curve.png') if fit_curve_dir is not None else None
+                
+                # Use scoring function with VP distance
+                score = vp_distance
+                # score = the_scoring_function_asymmetric_parabola(vp_distance, target, maxFitness, weight, min_val=min_val, max_val=max_val, plot_fit_curve=plot_fit_curve, fit_curve_path=fit_curve_path)
+                score = handle_nans_and_infs(score, simulated_data, target, key)
+                
+                # Apply normalization if requested (same logic as handle_float_or_int_comparison)
+                # if normalize:
+                #     print(f'Normalizing score for key {key}.')
+                #     seed_fitness = kwargs.get('seed_fitness', None)
+                #     fit_list = []
+                #     if seed_fitness is not None:
+                #     for seed in seed_fitness:
+                #         # parse abs_path to get series of keys to navigate the dictionary
+                #         keys = abs_path.split('.')
+                #         try:
+                #             for k in keys:
+                #                 seed = seed[k]
+                #             fit_list.append(seed['fit'])
+                #         except Exception as e:
+                #             pass
+                #     if len(fit_list) == 0:
+                #         print(f'No fitness values found for key {key}. Unable to normalize score. Using raw score.')
+                #         pass
+                #     else:                    
+                #         max_fit = max(fit_list)
+                #         if max_fit > 1000: max_fit = 1000 # cap max fitness to 1000
+                #         normalized_score = score / max_fit * 1000 # normalize score to max fitness within seeds and scale to 1000
+                #         print(f'Raw score for key {key}: {score}')
+                #         score = normalized_score
+                #         print(f'Normalized score for key {key}: {score}')
+                
+                fitness_dict[key]['fit'] = score
+                fitness_dict[key]['vp_distance'] = vp_distance
+                fitness_dict[key]['value'] = vp_distance
+                fitness_dict[key]['target'] = target
+
+                return fitness_dict
+            else:
+                return {} 
+
+        def handle_list_comparison(simulated_data, experimental_data, key, fitness_dict, plot_fit_curve=False,plot_fit_curve_dir =None):
             # compare lists
+            
+                
             if 'participating_units' in key:
                 def compare_participating_units(simulated_data, experimental_data, key, fitness_dict):
                     # compare the set of both lists - get percent overlap
@@ -512,7 +604,7 @@ def fitnessFunc_v3(simulated_data, reference_data_path, **kwargs): #def fitnessF
             
             #
             dtw_compare_keys = [
-                'spike_times',
+                # 'spike_times',
                 'spiking_times_by_unit',
                 'spiking_metrics_by_unit',
                 'bursts',
@@ -715,6 +807,8 @@ def fitnessFunc_v3(simulated_data, reference_data_path, **kwargs): #def fitnessF
         # loop through all paths in both dictionaries and compare the values of the keys
         for key in simulated_data:
             if key in skip_keys: continue # skip keys of non-interest          
+            if key =='spiking_times_by_unit':
+                print('here')
             if key in experimental_data:
                 
                 # handle unit mapping
@@ -740,7 +834,14 @@ def fitnessFunc_v3(simulated_data, reference_data_path, **kwargs): #def fitnessF
                 elif isinstance(simulated_data[sim_key], list):
                     fitness_dict = handle_list_comparison(simulated_data, experimental_data, key, fitness_dict, plot_fit_curve=plot_fit_curve, plot_fit_curve_dir=fit_curve_dir)
                 elif isinstance(simulated_data[sim_key], np.ndarray): 
-                    continue
+                    # continue
+                    ckwargs = {}
+                    ckwargs['max_val'] = max_val
+                    ckwargs['min_val'] = min_val
+                    ckwargs['normalize'] = True
+                    ckwargs['weight'] = weight
+                    ckwargs['seed_fitness'] = kwargs.get('seed_fitness', {})
+                    fitness_dict = handle_spike_times_comparison(simulated_data, experimental_data, key, fitness_dict, plot_fit_curve=plot_fit_curve, fit_curve_dir=fit_curve_dir, **ckwargs)
                     #fitness_dict = handle_numpy_array_comparison(simulated_data, experimental_data, key, fitness_dict)
                 elif isinstance(simulated_data[sim_key], (float, int, np.int64, np.float64)):
                     ckwargs = {}
@@ -821,6 +922,132 @@ def fitnessFunc_v3(simulated_data, reference_data_path, **kwargs): #def fitnessF
                     
         # return cleaned fitness dictionary            
         return fitness_dict
+
+    def get_avg_fitness_weighted_v2(fitness_dict):
+        """
+        Recursively folds up the fitness values with normalization across different metric types.
+        Normalizes fit values within each metric category before computing weighted averages.
+        This ensures that metrics with different ranges (e.g., VP distance 0-100 vs parabola scores 0-1000)
+        contribute equally to the final fitness.
+        """
+        
+        def collect_leaf_fits(d, abs_path='', fit_groups=None):
+            """Collect all leaf fit values and group them by metric type."""
+            if fit_groups is None:
+                fit_groups = {
+                    'spike_times': [],  # VP distances
+                    'scalar_metrics': []  # Other metrics (frs, burst_amp, etc.)
+                }
+            
+            if 'fit' in d and not any(isinstance(v, dict) and 'fit' in v for v in d.values()):
+                # This is a leaf node with a fit value
+                fit_val = d['fit']
+                if isinstance(fit_val, (int, float)) and not np.isnan(fit_val):
+                    # Categorize based on path
+                    if 'spiking_times_by_unit' in abs_path:
+                        fit_groups['spike_times'].append((abs_path, fit_val))
+                    else:
+                        fit_groups['scalar_metrics'].append((abs_path, fit_val))
+            
+            # Recurse into child dictionaries
+            for key, value in d.items():
+                if isinstance(value, dict):
+                    new_path = f'{abs_path}.{key}' if abs_path else key
+                    collect_leaf_fits(value, new_path, fit_groups)
+            
+            return fit_groups
+        
+        def normalize_fits(fit_groups):
+            """Normalize fit values within each group to [0, 1] range."""
+            normalized_map = {}
+            
+            for group_name, fits in fit_groups.items():
+                if not fits:
+                    continue
+                
+                # Extract just the values
+                values = [f[1] for f in fits]
+                paths = [f[0] for f in fits]
+                
+                # Find max value in this group
+                max_val = max(values)
+                
+                # Normalize to [0, 1]
+                if max_val > 0:
+                    for path, val in zip(paths, values):
+                        normalized_map[path] = val / max_val
+                else:
+                    for path, val in zip(paths, values):
+                        normalized_map[path] = 0.0
+            
+            return normalized_map
+        
+        def fold_up_normalized(d, abs_path='', normalized_map=None):
+            """Fold up using normalized values."""
+            if 'fit' in d and not any(isinstance(v, dict) and 'fit' in v for v in d.values()):
+                # Leaf node - use normalized value if available
+                if abs_path in normalized_map:
+                    normalized_val = normalized_map[abs_path]
+                    return normalized_val, 1
+                else:
+                    # Fallback to original value
+                    fit_val = d['fit']
+                    if isinstance(fit_val, (int, float)) and not np.isnan(fit_val):
+                        return fit_val / 1000.0, 1  # Normalize to [0,1] assuming max 1000
+                    else:
+                        return 0.0, 0
+            
+            total_sum = 0.0
+            total_count = 0
+            
+            for key, value in d.items():
+                if isinstance(value, dict):
+                    new_path = f'{abs_path}.{key}' if abs_path else key
+                    child_sum, child_count = fold_up_normalized(value, new_path, normalized_map)
+                    total_sum += child_sum
+                    total_count += child_count
+            
+            if total_count > 0:
+                weighted_avg = total_sum / total_count
+                # Store as normalized value (0-1 range)
+                d['fit_normalized'] = weighted_avg
+                # Also store scaled back to 0-1000 for compatibility
+                d['fit'] = min(weighted_avg * 1000.0, 1000.0)
+                return total_sum, total_count
+            
+            return 1.0, 0  # Return normalized max (1.0) if no fits found
+        
+        try:
+            # Step 1: Collect all leaf fit values and group by type
+            fit_groups = collect_leaf_fits(fitness_dict)
+            
+            # Step 2: Normalize within each group
+            normalized_map = normalize_fits(fit_groups)
+            
+            # Step 3: Fold up using normalized values
+            total_sum, total_count = fold_up_normalized(fitness_dict, '', normalized_map)
+            
+            # Compute average from normalized values (0-1 range)
+            if total_count > 0:
+                avg_fitness_normalized = total_sum / total_count
+                # Scale normalized average (0-1) back to (0-1000)
+                avg_fitness = avg_fitness_normalized * 1000.0
+            else:
+                avg_fitness = 1000.0
+            
+            # Cap at 1000
+            if avg_fitness > 1000.0:
+                avg_fitness = 1000.0
+            
+            fitness_dict['fit'] = avg_fitness
+            fitness_dict['fit_normalized'] = avg_fitness / 1000.0
+            
+        except Exception as e:
+            traceback.print_exc()
+            print(f"Error in normalized fitness calculation: {e}")
+            avg_fitness = 1000.0
+        
+        return avg_fitness, fitness_dict
 
     def get_avg_fitness_weighted(fitness_dict):
         """
@@ -969,7 +1196,7 @@ def fitnessFunc_v3(simulated_data, reference_data_path, **kwargs): #def fitnessF
         #if simData is None: raise ValueError('No simulated data found in kwargs.')
         
         # get candidate and job path from call stack
-        from .utils.extract_simulated_data import get_candidate_and_job_path_from_call_stack, retrieve_sim_data_from_call_stack, extract_data_of_interest_from_sim
+        from .utils.utils_old.extract_simulated_data import get_candidate_and_job_path_from_call_stack, retrieve_sim_data_from_call_stack, extract_data_of_interest_from_sim
         candidate_path, candidate_label = get_candidate_and_job_path_from_call_stack() #NOTE this part specifcally only works in batch processing, not in single candidate processing
         fitness_save_path = f'{candidate_path}_fitness.json'
         pkl_path = f'{candidate_path}_data.pkl'
@@ -1236,6 +1463,8 @@ def fitnessFunc_v3(simulated_data, reference_data_path, **kwargs): #def fitnessF
     
     # main logic =================================================================
     try:
+        # print(simulated_data)
+        # print(reference_data_path)
         time_start = time.time() # start timer
         experimental_metrics = np.load(reference_data_path, allow_pickle=True).item() # load experimental data for reference      
         kwargs['source'] = 'simulated' # set source to simulated
@@ -1255,18 +1484,19 @@ def fitnessFunc_v3(simulated_data, reference_data_path, **kwargs): #def fitnessF
         #fitness_dict = clean_fitness_dict(fitness_dict)    
         
         #avg_fitness, fitness_dict = get_avg_fitness(fitness_dict)
-        avg_fitness, fitness_dict = get_avg_fitness_weighted(fitness_dict)
+        avg_fitness, fitness_dict = get_avg_fitness_weighted_v2(fitness_dict)
+        # print(f'Average fitness: {avg_fitness}')
 
         #TODO: implement deal breakers??
         # dealbreakers
         # broken = False
-        broken = break_deals(fitness_dict, simulated_metrics, kwargs)
-        if broken:
-            print('Deal broken. Returning high fitness value.')
-            fitness_dict['broken'] = True
-            fitness_dict['unbroken_fit'] = avg_fitness
-            avg_fitness = 1000 #redefine avg_fitness to be high if deal is broken
-            fitness_dict['fit'] = avg_fitness 
+        # broken = break_deals(fitness_dict, simulated_metrics, kwargs)
+        # if broken:
+        #     print('Deal broken. Returning high fitness value.')
+        #     fitness_dict['broken'] = True
+        #     fitness_dict['unbroken_fit'] = avg_fitness
+        #     avg_fitness = 1000 #redefine avg_fitness to be high if deal is broken
+        #     fitness_dict['fit'] = avg_fitness 
 
         fitness_save_path = kwargs.get('fitness_save_path', None)
         if fitness_save_path is not None: # save fitness to .json file

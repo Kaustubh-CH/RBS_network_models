@@ -13,7 +13,7 @@ import spikeinterface.full as si
 import spikeinterface.postprocessing as spost
 from MEA_Analysis.NetworkAnalysis.awNetworkAnalysis.network_analysis import get_experimental_network_metrics_v3
 import traceback
-#from .utils.helper import indent_mode_on, indent_mode_off
+# from .utils.helper import indent_mode_on, indent_mode_off
 from MEA_Analysis.NetworkAnalysis.awNetworkAnalysis.network_analysis import compute_network_metrics
 import json
 
@@ -359,7 +359,7 @@ def tune_conv_params(
         
         # init print statements
         print(f"Analyzing network data collected in well{str(0).zfill(2)}{stream_num}...")
-        indent_mode_on(level=1) # indent all print statements in this block
+        # indent_mode_on(level=1) # indent all print statements in this block
         print(f"Initializing...")
         
         output_dir = output_dirs[i]
@@ -412,7 +412,7 @@ def run_analysis(
         **kwargs):
     
     # Subfunctions ======================================
-    def get_metrics(sorting_object, recording_object, sorting_analyzer, conv_params, mega_params, debug_mode=False, **kwargs):
+    def get_metrics(sorting_object, recording_object, sorting_analyzer, conv_params, mega_params, max_duration= None,debug_mode=False, **kwargs):
         # get network metrics
         well_id = f'well{str(0).zfill(2)}{stream_num}'
         well_recording_segment = recording_object 
@@ -445,6 +445,7 @@ def run_analysis(
                 'sorting_analyzer': sorting_analyzer,
                 'run_parallel': True,
                 'max_workers': kwargs['max_workers'],
+                'max_duration': max_duration,
                 #'max_workers': 32,
                 #'max_workers': 16,
                 #'max_workers' : 256,
@@ -465,6 +466,7 @@ def run_analysis(
                 # kwargs['dtw_temp'] = dtw_dir
                 
                 'dtw_temp': dtw_temp,
+                'max_duration': kwargs.get('max_duration', 20),
                 # 'dtw_output': dtw_output,
                 # 'mega_dtw': mega_dtw_output,
                 
@@ -793,7 +795,7 @@ def analyze_network_data(
             # load json file
             with open(json_path, 'r') as f:
                 recording_details = json.load(f)
-            h5_path = recording_details['kwargs']['file_path']
+            h5_path = recording_details['kwargs']['parent_recording']['kwargs']['file_path']
             
             #HACK stupid patch to fix old sorting path
             if 'zinputs' in h5_path:
@@ -869,7 +871,7 @@ def analyze_network_data(
         
         # init print statements
         print(f"Analyzing network data collected in well{str(0).zfill(2)}{stream_num}...")
-        indent_mode_on(level=1) # indent all print statements in this block
+        # indent_mode_on(level=1) # indent all print statements in this block
         print(f"Initializing...")
         
         output_dir = output_dirs[i]
@@ -901,7 +903,7 @@ def analyze_network_data(
         #     debug_mode = debug_mode, # limit number of units and bursts to analyze to get through functions quickly
         #     **kwargs)    
     print('done')
-    indent_mode_off() # turn off indenting for all print statements
+    # indent_mode_off() # turn off indenting for all print statements
     return
 
 # aw 2025-04-09 10:30:26 - deprecated so that inputs are more minimal
@@ -1001,7 +1003,7 @@ def analyze_network_data_dep(
         
         # init print statements
         print(f"Analyzing network data collected in well{str(0).zfill(2)}{stream_num}...")
-        indent_mode_on(level=1) # indent all print statements in this block
+        # indent_mode_on(level=1) # indent all print statements in this block
         print(f"Initializing...")
         
         # run analysis

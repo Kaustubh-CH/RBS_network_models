@@ -88,3 +88,4 @@ def main():
 # This block enables the script to be run interactively or as a module
 if __name__ == "__main__":
     main()
+# /pscratch/sd/k/ktub1999/networkSimulations/z_simulated_data/KCNT_Test_Jan12_20s_noSeed_v3/batch_runs/batch_2026-01-12_spiking_only

@@ -8,13 +8,13 @@ fit_schema = {
     #'spiking_data':False,
     # 2025-05-19 17:46:57 - including spiking data now after optimizing burst rate.
     'spiking_data':{
-        'spike_times': False,
+        'spike_times': True,
         'spiking_times_by_unit': False,
         'spiking_metrics_by_unit': False,
 
         # firing rates
         'frs': { # aw 2025-05-23 13:45:35 current mean target aroun 2.5 spikes/s, max around 21 spikes/s min around 1 spikes/s
-            'include': False, # boolean - if True, this will be included in fitness scoring. This is absolutely required if wanting to pass min, max, and normalize keys to handle_inclusion in fitness function
+            'include': True, # boolean - if True, this will be included in fitness scoring. This is absolutely required if wanting to pass min, max, and normalize keys to handle_inclusion in fitness function
             'min_val': 0.001, # value int/float submitted to fitness function
             'max_val': 22.0, # value int/float submitted to fitness function
             #'max_val': 40.0, # value int/float submitted to fitness function
@@ -59,9 +59,9 @@ fit_schema = {
         'num_total_firing': False, # aw 2025-05-20 15:11:08 current target=301
 
         # spike counts
-        'E_spikes': False, # aw 2025-05-20 15:11:08 false - time dependent, so only comparable to experimental value if simulation time is the same
-        'I_spikes': False, # aw 2025-05-20 15:11:08 false - time dependent, so only comparable to experimental value if simulation time is the same
-        'U_spikes': False, # aw 2025-05-20 15:11:08 false - time dependent, so only comparable to experimental value if simulation time is the same
+        'E_spikes': True, # aw 2025-05-20 15:11:08 false - time dependent, so only comparable to experimental value if simulation time is the same
+        'I_spikes': True, # aw 2025-05-20 15:11:08 false - time dependent, so only comparable to experimental value if simulation time is the same
+        'U_spikes': True, # aw 2025-05-20 15:11:08 false - time dependent, so only comparable to experimental value if simulation time is the same
         
         # fr ratios
         'EI_fr_ratios': { # # aw 2025-05-20 15:11:08 current target=0.16742355633713643
@@ -84,10 +84,10 @@ fit_schema = {
         }, # aw 2025-05-27 13:04:43
 
         # interspike intervals
-        'isi': False,
-        'i_isi': False,
-        'e_isi': False,
-        'u_isi': False,
+        'isi': True,
+        'i_isi': True,
+        'e_isi': True,
+        'u_isi': True,
         },
     'sim_data_path': False,
     'timeVector': False,
@@ -119,17 +119,17 @@ fit_schema = {
                                 # NOTE: ignored if seeds are not provided. This should be used to pin down already optimized values
         },  
         'burst_metrics': {
-            'num_bursts': False,
+            'num_bursts': True,
             'burst_rate': { # aw 2025-05-20 16:16:30 current target=0.19333333333333333
                 'include': True, # boolean - if True, this will be included in fitness scoring. This is absolutely required if wanting to pass min, max, and normalize keys to handle_inclusion in fitness function
                 'min_val': 0.02, # value int/float submitted to fitness function
                 'max_val': 1.0, # value int/float submitted to fitness function
                 'weight': 1.0, # value int/float submitted to fitness function - bigger values widen the trough of fitcurve
-                'normalize': False, # boolean - if True, after fitness scoring, score will be adjusted - normalized to the range of seed values 
+                'normalize': True, # boolean - if True, after fitness scoring, score will be adjusted - normalized to the range of seed values 
                                     # NOTE: ignored if seeds are not provided. This should be used to pin down already optimized values
             },
             'burst_ids': False,
-            'ibi': False,
+            'ibi': True,
 
             # aw 2025-05-25 22:56:22 - tightening up burst amplitude
             #  mean: 4.636081156813823
@@ -144,10 +144,10 @@ fit_schema = {
                 'normalize': False, # boolean - if True, after fitness scoring, score will be adjusted - normalized to the range of seed values 
                                     # NOTE: ignored if seeds are not provided. This should be used to pin down already optimized values
             },
-            'burst_duration': False,
-            'burst_parts': False,
-            'num_units_per_burst': False,
-            'in_burst_fr': False,                        
+            'burst_duration': True,
+            'burst_parts': True,
+            'num_units_per_burst': True,
+            'in_burst_fr': True,                        
             },
         'warnings': False,
     },

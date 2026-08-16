@@ -185,6 +185,11 @@ def batchEvol_v2(**kwargs):
             
             # Network cool down parameter - excludes this period from metric computation
             'network_cool_down': kwargs.get('network_cool_down', 0.0),
+
+            # Opt-in dealbreaker: kill candidates whose E or I population is
+            # completely silent. OFF by default because drug conditions such as
+            # ap5_nbqx are *supposed* to zero out excitatory firing.
+            'IE_fr_check': kwargs.get('IE_fr_check', False),
         }
         return fitnessFuncArgs  
     
@@ -541,8 +546,31 @@ def batchEvol_v2(**kwargs):
         )
         # get param labels in the same order NetPyNE will use
         paramLabels = [x['label'] for x in b.params]
-        # get seed cfgs using the same logic as evolCfg seeds
-        seeds_iterable, _ = get_seed_cfgs(params, **kwargs)
+        # get seed cfgs using the same logic as evolCfg seeds -- EXCEPT for the
+        # pop_size truncation in get_seed_cfgs() (seeds = seeds[:pop_size]).
+        #
+        # That truncation is an EVOL-mode concept: there, pop_size is the real
+        # population size, so seeding more individuals than the population can
+        # hold is meaningless. It predates this block (adamm_nersc 2025-05-19)
+        # and was inherited here purely because this call reuses get_seed_cfgs.
+        #
+        # It is wrong for optuna. study.enqueue_trial() only APPENDS to a queue
+        # that optuna pops ONE AT A TIME -- study.optimize() is called without
+        # n_jobs (optuna_parallel.py:120), so N enqueued seeds are evaluated
+        # sequentially as trials 0..N-1. They are never concurrent and do not
+        # need pop_size workers to hold them.
+        #
+        # Since optuna forces pop_size=1, the inherited truncation silently
+        # dropped every seed after the first (log signature: "Using 1 seeds:"
+        # followed by "Enqueueing 1 seed trial(s)" no matter how many were
+        # listed). Under the old evol defaults (pop_size 512/256/128/20) the
+        # condition was simply never true, which is why multi-seed runs worked
+        # before the optuna switch.
+        #
+        # Overriding pop_size for THIS call only; the evol path above is
+        # untouched and still truncates to the real population size.
+        _enqueue_kwargs = {**kwargs, 'pop_size': len(seeds)}
+        seeds_iterable, _ = get_seed_cfgs(params, **_enqueue_kwargs)
         if seeds_iterable is not None:
             print(f'Enqueueing {len(seeds_iterable)} seed trial(s) into Optuna study...')
             for seed_vals in seeds_iterable:

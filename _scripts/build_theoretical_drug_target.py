@@ -101,6 +101,24 @@ THEORETICAL_RATIOS: Dict[str, Dict[str, Dict[str, object]]] = {
             "ratio": 2.0, "max_dev": 1.0,
             "rationale": "Same recruitment increase at the finer burstlet level.",
         },
+        # --- v3 additions: burstlet-rate + permissive-threshold (pre_burstlet)
+        # ratios so schema_v3_drug_theory_v3 can score them. Grounded in the same
+        # disinhibition rationale (pre_burstlet mirrors burstlet at a permissive
+        # threshold; burstlet rate rises with the network-burst rate).
+        "burstlet_rate_ratio": {
+            "ratio": 1.8, "max_dev": 0.8,
+            "rationale": "More frequent burstlets under disinhibition; mirrors the "
+                         "network-burst-rate increase (1.8).",
+        },
+        "pre_burstlet_rate_ratio": {
+            "ratio": 1.8, "max_dev": 0.8,
+            "rationale": "Permissive-threshold burstlet rate; same increase as burstlet_rate.",
+        },
+        "pre_burstlet_duration_ratio": {
+            "ratio": 2.0, "max_dev": 1.0,
+            "rationale": "Permissive-threshold burstlet duration; same lengthening as "
+                         "burstlet_duration.",
+        },
     },
 }
 
@@ -111,8 +129,6 @@ EXCLUDED_FEATURES: Dict[str, Dict[str, str]] = {
                                  "ratio carries no gradient. The scorer also already max-penalises "
                                  "early superbursts independently.",
         "superburst_duration_ratio": "Same reason as superburst_rate_ratio.",
-        "pre_burstlet_rate_ratio": "Redundant with burstlet_rate at a permissive threshold.",
-        "pre_burstlet_duration_ratio": "Redundant with burstlet_duration.",
         "mean_participation_ratio": "Strongly correlated with burst amplitude; including both "
                                     "double-counts the same recruitment effect.",
     },

@@ -158,6 +158,34 @@ if version == 3.0:
     assert all([x in cfg.inhib_units for x in I_cells]), 'I_cells contains gids not in inhibitory population'
     #cfg.recordCells = [('E', E_cells), ('I', I_cells)]
 
+    # --- OPT-IN soma voltage recording (RBS_RECORD_CELLS=<n per population>) ---
+    # OFF by default (recordCells stays []), because turning it on changes the
+    # size of every trial pkl and studies already in flight should not start
+    # writing a different amount of data halfway through.
+    #
+    # A POOL, not a pair. The report wants two excitatory and two inhibitory
+    # traces where the E and I cells are genuinely CONNECTED, but connectivity
+    # is not known here -- the network is not built until netParams runs, and
+    # whether any given E-I pair connects depends on 'exp(-dist_3D/probLengthConst)*prob'
+    # (netParams.py:244), i.e. on distance. Picking exactly 2+2 here would give
+    # a connected pair only by luck. So record a small pool and let the report
+    # pick a verified-connected pair out of it post hoc, reading conns[].preGid
+    # from the saved network (cfg.saveCellConns is already True).
+    #
+    # Indices are POP-RELATIVE ('E', i) tuples, not gids. cfg.excit_units /
+    # cfg.inhib_units hold EXPERIMENTAL unit ids, which are not the simulation's
+    # gid numbering -- feeding those to recordCells would record the wrong cells.
+    _n_rec = int(os.environ.get('RBS_RECORD_CELLS', 0))
+    if _n_rec > 0:
+        _ne = min(_n_rec, cfg.num_excite)
+        _ni = min(_n_rec, cfg.num_inhib)
+        _eidx = sorted(random.sample(range(cfg.num_excite), _ne))
+        _iidx = sorted(random.sample(range(cfg.num_inhib), _ni))
+        cfg.recordCells = [('E', i) for i in _eidx] + [('I', i) for i in _iidx]
+        print(f"RBS_RECORD_CELLS={_n_rec}: recording soma_voltage from "
+              f"{_ne} E + {_ni} I cells (pop-relative indices) "
+              f"at recordStep={cfg.recordStep} ms")
+
     #testing new params
     #cfg.coreneuron = True
     #cfg.dump_coreneuron_model = True

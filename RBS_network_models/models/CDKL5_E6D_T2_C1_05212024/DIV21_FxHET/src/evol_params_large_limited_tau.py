@@ -40,7 +40,7 @@ params.update({
 
 # Connection Probability Length Constant
 # params['probLengthConst'] = [1, 7000]
-params['probLengthConst'] = [100, 2000]
+params['probLengthConst'] = [1, 500]
 
 # Connectivity Parameters
 params.update({
